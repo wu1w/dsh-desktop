@@ -1,0 +1,30 @@
+{
+  "name": "@dsh/codex-engine",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Isolated Codex App Server engine foundation for a separate DSH app. Not a full Codex client.",
+  "exports": {
+    ".": "./lib/engine.js",
+    "./client": "./lib/jsonrpc-client.js",
+    "./plugin": "./lib/plugin.js",
+    "./standalone": "./lib/standalone.js"
+  },
+  "peerDependencies": {
+    "@deepseek-ai/cordis": "^4.0.5"
+  },
+  "peerDependenciesMeta": {
+    "@deepseek-ai/cordis": {
+      "optional": true
+    }
+  },
+  "scripts": {
+    "test": "node --test test/*.test.js"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "devDependencies": {
+    "@deepseek-ai/cordis": "4.0.5"
+  }
+}

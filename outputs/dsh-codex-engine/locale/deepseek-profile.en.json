@@ -1,0 +1,6 @@
+{
+  "builtin.name": "Codex default",
+  "builtin.description": "Use the pinned Codex runtime's original model instructions.",
+  "candidate.name": "DSH · DeepSeek Flash v1",
+  "candidate.description": "Versioned DeepSeek behavior profile with DSH identity, bounded tool use and evidence-based completion. Experimental; can be switched back to Codex default."
+}

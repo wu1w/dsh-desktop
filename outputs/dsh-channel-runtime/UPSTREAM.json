@@ -1,0 +1,91 @@
+{
+  "repository": "https://github.com/NousResearch/hermes-agent",
+  "commit": "dde8800ed91c6e128064a17d5db914d74622594b",
+  "license": "MIT",
+  "files": [
+    {
+      "path": "LICENSE",
+      "sha256": "821556e6336796450ab852d375117b48a4887e71d255794fd6318d99982a5ab6"
+    },
+    {
+      "path": "gateway/platforms/weixin.py",
+      "sha256": "e0c366634c21a39aa5f21c32e8c1e91dae1cbd548d9d5d9192a9e65f8cbabb91"
+    },
+    {
+      "path": "gateway/platforms/event.py",
+      "sha256": "8f204f1ab872437583d693bb53476a8a388f9fae3d52dd0c819de0521a361668"
+    },
+    {
+      "path": "gateway/platforms/helpers.py",
+      "sha256": "f39b8811d3a6732b077c5e84f641cca4b417209bfd26be69c43564731dd203b4"
+    },
+    {
+      "path": "gateway/platforms/qqbot/adapter.py",
+      "sha256": "555cbc88d1ccf9fed520ed03bc2aa3e3b8fbfc6a965e829a7f8a43acf70734e5"
+    },
+    {
+      "path": "gateway/platforms/qqbot/constants.py",
+      "sha256": "49f0d3b096ba35928f46eecb51fffbdcbfd3565fc4a89f8bca44e2a744f6876d"
+    },
+    {
+      "path": "gateway/platforms/qqbot/utils.py",
+      "sha256": "b8b5c2ac14f6253930cf2eb0e26b198dd00d9b9c20286cc6a6c7568246bcf1f9"
+    },
+    {
+      "path": "gateway/platforms/qqbot/chunked_upload.py",
+      "sha256": "e230b5dd2eb40e3da00f7f869516273cc3e1f194c49b45fcf507b4cd07f7735d"
+    },
+    {
+      "path": "gateway/platforms/qqbot/keyboards.py",
+      "sha256": "b285db367ef3b0228a3adbc1947a0ce797887d3ecf93cde4e6d6c0f3a2484dd0"
+    },
+    {
+      "path": "gateway/platforms/qqbot/crypto.py",
+      "sha256": "676d5790e289d66a9295d737aeae27bc348cd7eb15237d480faef7f9698bd09b"
+    },
+    {
+      "path": "plugins/platforms/feishu/adapter.py",
+      "sha256": "2dcbaa98e9801c2ac0e10b4cf7436e778f6d38fe98d5a585e995700f80147afc"
+    },
+    {
+      "path": "tools/url_safety.py",
+      "sha256": "70cfab89c89fef866326ab27d2e812bb04eeb347fbef152eb64a37fcb6265ccd"
+    },
+    {
+      "path": "gateway/platforms/media_cache.py",
+      "sha256": "5a81fdbcd872eafcfe94bee6bf1ab0670a3b120e1d9a6fa283a4f490dc356370"
+    },
+    {
+      "path": "plugins/platforms/feishu/feishu_admission_diagnostics.py",
+      "sha256": "56aeb9af35f32dcba0773a67a391517b515cb764ed2e269ac2ceca340d9e6ece"
+    },
+    {
+      "path": "plugins/platforms/dingtalk/adapter.py",
+      "sha256": "089cfc14ffa8df4024a026a7ec9a5f00f9575750403a09a8217897b0ea799059"
+    },
+    {
+      "path": "plugins/platforms/dingtalk/inbound.py",
+      "sha256": "ca301977e56b3495696f3ec4ec542111a749d17940f97b002e425b20d53eee10"
+    },
+    {
+      "path": "plugins/platforms/wecom/adapter.py",
+      "sha256": "45f06eaef5e3740bf3ff35dde6175e1fe00fce2e4eabc4b8f0762d94be560480"
+    },
+    {
+      "path": "plugins/platforms/wecom/media.py",
+      "sha256": "833fb8e1f38b7a46401607c4f4dff5a2fbf0e1fabe47bc3f6e44f7e86bb6f99b"
+    },
+    {
+      "path": "plugins/platforms/wecom/send_queue.py",
+      "sha256": "384047786d23157c62c30cd472d0c7c58c602faf4304068d471e893c657e3380"
+    },
+    {
+      "path": "plugins/platforms/wecom/streaming.py",
+      "sha256": "cf68d3af0f6c2b4f418b24a7a2d5ec54b06d466717fa09bf430e48ec9e98d0e6"
+    },
+    {
+      "path": "gateway/platforms/qqbot/onboard.py",
+      "sha256": "7c7780c4eab590ba2c455676d11745305e5388e5c301493fadb75b75ea0888ea"
+    }
+  ]
+}

@@ -1,0 +1,3 @@
+import {writeFile} from 'node:fs/promises';import path from 'node:path';import {DshNativeEngine} from '../../lib/engine.js';import {ScriptedAdapter,toolChunk} from '../../lib/scripted-adapter.js';
+const [root,id]=process.argv.slice(2);let calls=0;const adapter=new ScriptedAdapter(async()=>{if(++calls===1)return toolChunk('write',{file_path:path.join(root,'project','proof.txt'),content:'ONE_COMMITTED_WRITE'});await writeFile(path.join(root,'ready'),'ready');return{hang:true};});
+const engine=new DshNativeEngine({dataDir:path.join(root,'data'),adapter,autoApproveWorkspaceWrites:true,locale:'en'});await engine.createSession(id,{cwd:path.join(root,'project')});await engine.startTurn(id,'Write proof once, then wait.',{sandbox:'workspace-write'});setInterval(()=>{},1000);

@@ -1,0 +1,3 @@
+import {deepSeekProfile,DEEPSEEK_PROFILE_ID} from '../../engine/lib/deepseek-profile.js';
+export const manifest={id:'feature-deepseek-profile',type:'feature',version:'1.0.0',name:{'zh-CN':'DeepSeek Flash 行为适配',en:'DeepSeek Flash behavior profile'},description:{'zh-CN':'仅对新建的 Codex/Flash 聊天生效；停用后新聊天恢复原生默认。现有聊天保留原配置。',en:'Applies to new Codex/Flash chats. Disable to restore the native default for new chats. Existing chats retain their profile.'},compatibleEngines:['codex']};
+export function apply(ctx,host){ctx.effect(()=>host.registerInstructionProfile({engine:'codex',resolve:({model,locale})=>model==='deepseek-v4.1-flash'?deepSeekProfile({id:DEEPSEEK_PROFILE_ID,model,locale,engine:'codex'}):null}));}

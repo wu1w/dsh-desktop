@@ -1,0 +1,6 @@
+export const slashCommands=['computer','goal','loop','new','stop','resume','model','engine','skills','mcp','plugins','channels','settings'];
+export function slashMatches(text){const match=/^\/([^\s/]*)$/.exec(text);return match?slashCommands.filter(name=>name.includes(match[1].toLowerCase())):null;}
+export function parseSlash(text){const match=/^\/([a-z]+)(?:\s+([\s\S]*))?$/i.exec(text.trim());if(!match||!slashCommands.includes(match[1].toLowerCase()))return null;const name=match[1].toLowerCase(),args=match[2]?.trim()??'';if(!['goal','loop'].includes(name))return {name,args};if(['pause','resume','stop','complete'].includes(args))return {name,action:args};if(!args)return {name,needsInput:true};let objective=args,intervalMs=300000;
+ if(name==='loop'){const interval=/^(\d+(?:\.\d+)?)(s|m|h|d)\s+([\s\S]+)$/i.exec(args);if(interval){intervalMs=Number(interval[1])*({s:1000,m:60000,h:3600000,d:86400000}[interval[2].toLowerCase()]);objective=interval[3].trim();}else if(/^\d+(?:\.\d+)?[smhd](?:\s|$)/i.test(args))return {name,needsInput:true};if(!Number.isSafeInteger(intervalMs)||intervalMs<10000||intervalMs>604800000)return {name,error:'slashIntervalError'};}
+ return {name,program:{kind:name,objective,intervalMs}};
+}

@@ -1,0 +1,23 @@
+{
+  "source": "Owned native session 105f8460-37e8-4ab9-9ac1-bc831050c954, CLI 2.1.295. Reasoning body omitted; message/block identity and public marker retained.",
+  "messages": [
+    {
+      "type": "assistant",
+      "uuid": "4a4c6570-1bea-45c6-80bf-78e3f673d870",
+      "apiBlockIndex": 0,
+      "message": {
+        "id": "22f11e339951425ab0477a5e3225147c",
+        "content": [{ "type": "thinking", "thinking": "" }]
+      }
+    },
+    {
+      "type": "assistant",
+      "uuid": "de06e0e7-177f-4c72-bb46-289be9986f16",
+      "apiBlockIndex": 1,
+      "message": {
+        "id": "22f11e339951425ab0477a5e3225147c",
+        "content": [{ "type": "text", "text": "CLAUDE_HOST_OK" }]
+      }
+    }
+  ]
+}

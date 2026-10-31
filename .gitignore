@@ -1,0 +1,39 @@
+# This workspace also contains private runtime data, diagnostics and old builds.
+# Track only the five authoritative DSH source packages and repository docs.
+/*
+!/.gitignore
+!/README.md
+!/outputs/
+/outputs/*
+!/outputs/dsh-codex-client/
+!/outputs/dsh-codex-engine/
+!/outputs/dsh-native-engine/
+!/outputs/dsh-claude-engine/
+!/outputs/dsh-channel-runtime/
+
+**/.DS_Store
+**/node_modules/
+**/__pycache__/
+**/*.pyc
+**/*.log
+**/.env
+**/.env.*
+**/.local-data/
+**/*.pem
+**/*.key
+**/*.sqlite*
+**/*.db
+
+# Recreated by the client build; never edit these generated runtime copies.
+/outputs/dsh-codex-client/dist/
+/outputs/dsh-codex-client/engine/
+/outputs/dsh-codex-client/claude-engine/
+/outputs/dsh-codex-client/native-engine/
+/outputs/dsh-codex-client/channel-runtime/
+/outputs/dsh-codex-client/* 2/
+/outputs/dsh-codex-client/native/bin/
+/outputs/dsh-codex-client/reference/
+
+# Downloaded CPython distribution and installed, hash-pinned Python packages.
+/outputs/dsh-channel-runtime/python/
+/outputs/dsh-channel-runtime/packages/

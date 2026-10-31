@@ -1,0 +1,56 @@
+{
+  "name": "@dsh/native-engine",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "In-process DeepSeek Harness engine using @deepseek-ai/dsh-agent-loop 0.2.1-rc.2. Not an OpenAI chat clone.",
+  "exports": {
+    ".": "./lib/engine.js",
+    "./scripted-adapter": "./lib/scripted-adapter.js"
+  },
+  "scripts": {
+    "test": "node --test test/*.test.js"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "@deepseek-ai/cordis": "4.0.5",
+    "@deepseek-ai/dsh-agent": "0.2.1-rc.2",
+    "@deepseek-ai/dsh-agent-loop": "0.2.1-rc.2",
+    "@deepseek-ai/dsh-anonymous-user-id": "0.2.1-rc.2",
+    "@deepseek-ai/dsh-atomic-write": "0.2.1-rc.2",
+    "@deepseek-ai/dsh-attachment": "0.2.1-rc.2",
+    "@deepseek-ai/dsh-brand": "0.2.1-rc.2",
+    "@deepseek-ai/dsh-deepseek-llm-api-extensions": "0.2.1-rc.2",
+    "@deepseek-ai/dsh-fs": "0.2.1-rc.2",
+    "@deepseek-ai/dsh-fs-local": "0.2.1-rc.2",
+    "@deepseek-ai/dsh-home-paths": "0.2.1-rc.2",
+    "@deepseek-ai/dsh-launch-environment": "0.2.1-rc.2",
+    "@deepseek-ai/dsh-llm": "0.2.1-rc.2",
+    "@deepseek-ai/dsh-llm-deepseek": "0.2.1-rc.2",
+    "@deepseek-ai/dsh-llm-pi-ai": "0.2.1-rc.2",
+    "@deepseek-ai/dsh-ptc-runtime": "0.2.1-rc.2",
+    "@deepseek-ai/dsh-sandbox": "0.2.1-rc.2",
+    "@deepseek-ai/dsh-sandbox-local": "0.2.1-rc.2",
+    "@deepseek-ai/dsh-sandbox-policy": "0.2.1-rc.2",
+    "@deepseek-ai/dsh-scope": "0.2.1-rc.2",
+    "@deepseek-ai/dsh-session": "0.2.1-rc.2",
+    "@deepseek-ai/dsh-session-checkpoint-policy": "0.2.1-rc.2",
+    "@deepseek-ai/dsh-session-persistence": "0.2.1-rc.2",
+    "@deepseek-ai/dsh-session-persistence-jsonl": "0.2.1-rc.2",
+    "@deepseek-ai/dsh-session-projection": "0.2.1-rc.2",
+    "@deepseek-ai/dsh-system-prompt": "0.2.1-rc.2",
+    "@deepseek-ai/dsh-timeout": "0.2.1-rc.2",
+    "@deepseek-ai/dsh-tool-fs": "0.2.1-rc.2",
+    "@deepseek-ai/dsh-tools": "0.2.1-rc.2",
+    "@deepseek-ai/dsh-typert-protocol": "0.2.1-rc.2",
+    "@deepseek-ai/dsh-typert-registry": "0.2.1-rc.2",
+    "@deepseek-ai/dsh-user-approval": "0.2.1-rc.2",
+    "@deepseek-ai/dsh-util-values": "0.2.1-rc.2",
+    "@deepseek-ai/dsh-working-directory": "0.2.1-rc.2",
+    "@deepseek-ai/schemastery": "3.18.5",
+    "zod": "4.4.3",
+    "@deepseek-ai/cosmokit": "1.8.6"
+  }
+}

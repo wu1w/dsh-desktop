@@ -1,0 +1,22 @@
+import React from 'react';
+import {Monitor,Plus,FileUp,Folder,Sparkles,ShieldAlert,Zap,ChevronDown,Square,ArrowUp,TerminalSquare,Settings,LoaderCircle} from 'lucide-react';
+import {Dropdown,MenuItem,MenuLabel,MenuDivider} from './menu.jsx';
+
+export function ComposerControls({t,models,model,effort,permission,busy,stopDisabled=false,submitting,followUpBehavior,canSend,onModel,onEffort,onPermission,onFiles,onProjectFile,onSkills,onModels,onTerminal,onStop,capabilities={},modelDisabled=false,terminalEnabled=true,filesEnabled=true,integrationsEnabled=true,hasProject=true,computerEnabled=false}){
+  const selected=models.find(item=>item.id===model);
+  return <div className="composer-toolbar"><div className="composer-tools">
+    <Dropdown label={t('attach')} above className="attachment-dropdown" trigger={<Plus size={18} strokeWidth={1.6}/>}>
+      {close=><><MenuItem icon={FileUp} label={t('addFiles')} disabled={!filesEnabled} onClick={()=>{close();onFiles();}}/><MenuItem icon={Folder} label={t(hasProject?'projectFiles':'chooseProjectFiles')} disabled={!filesEnabled} onClick={()=>{close();onProjectFile();}}/>{computerEnabled?<MenuItem icon={Monitor} label={t('computerUse')} onClick={()=>{close();window.dispatchEvent(new Event('dsh-open-computer'));}}/>:null}<MenuDivider/><MenuItem icon={Sparkles} label={t('useSkill')} disabled={!integrationsEnabled} onClick={()=>{close();onSkills();}}/></>}
+    </Dropdown>
+    <Dropdown label={t('permissions')} above className="permission-dropdown" trigger={<><ShieldAlert size={15}/><span>{t(permission==='danger-full-access'?'fullAccess':permission==='workspace-write'?'workspaceWrite':'readOnly')}</span><ChevronDown size={10}/></>}>
+      {close=><><MenuLabel>{t('permissions')}</MenuLabel>{[['read-only','readOnly','readOnlyDetail'],['workspace-write','workspaceWrite','workspaceDetail'],['danger-full-access','fullAccess','fullAccessDetail']].map(([value,label,detail])=><MenuItem key={value} icon={ShieldAlert} label={t(label)} detail={t(detail)} checked={permission===value} disabled={busy||(value==='danger-full-access'&&capabilities.fullAccess===false)} onClick={()=>{if(value!=='danger-full-access'||window.confirm(t('fullAccessConfirm'))){onPermission(value);close();}}}/>)}</>}
+    </Dropdown>
+    <button className="icon-button terminal-toggle" type="button" aria-label={t('terminal')} title={t('terminal')} disabled={!terminalEnabled} onClick={onTerminal}><TerminalSquare size={15}/></button>
+  </div><div className="composer-model">
+    <Dropdown label={t('model')} above align="right" className="model-dropdown" trigger={<><Zap size={14} fill="currentColor"/><span className="toolbar-model-name">{selected?.name??model}</span><span className="effort-caption">{t(effort)}</span><ChevronDown size={11}/></>}>
+      {close=><>{[...new Set(models.map(m=>m.providerName??'OpenCode Go'))].map(provider=><React.Fragment key={provider}><MenuLabel>{provider}</MenuLabel>{models.filter(m=>(m.providerName??'OpenCode Go')===provider).map(item=><MenuItem key={item.id} label={item.name} detail={item.available===false?t('providerUnavailable',{engines:(item.engines??[]).map(e=>({'dsh-native':'DSH',codex:'Codex','claude-code':'Claude Code'})[e]).join(' · ')}):undefined} checked={item.id===model} disabled={busy||submitting||modelDisabled||item.available===false} onClick={()=>{onModel(item.id);close();}}/>)}</React.Fragment>)}<MenuDivider/><MenuLabel>{t('effort')}</MenuLabel>{['low','high','max'].map(value=><MenuItem key={value} label={t(value)} detail={busy||submitting?t('effortLocked'):undefined} checked={effort===value} disabled={busy||submitting} onClick={()=>{onEffort(value);close();}}/>)}<MenuDivider/><MenuItem icon={Settings} label={t('manageModels')} onClick={()=>{close();onModels();}}/></>}
+    </Dropdown>
+    {busy&&canSend?<button type="submit" className="icon-button queue-submit" aria-label={t(followUpBehavior==='steer'?'sendSteer':'insert')} title={t(followUpBehavior==='steer'?'sendSteer':'sendQueue')}><ArrowUp size={17}/></button>:null}
+    {busy?<button type="button" className="send-button icon-button" aria-label={t('stop')} title={t('stop')} disabled={stopDisabled} onClick={onStop}><Square size={11} fill="currentColor"/></button>:<button className="send-button icon-button" type="submit" aria-label={t(submitting?'sending':'send')} title={t(submitting?'sending':'send')} disabled={!canSend}>{submitting?<LoaderCircle size={16} className="spinner"/>:<ArrowUp size={18}/>}</button>}
+  </div></div>;
+}

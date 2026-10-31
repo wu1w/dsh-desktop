@@ -1,0 +1,6 @@
+{
+  "builtin.name": "Codex 默认",
+  "builtin.description": "使用独立固定版本 Codex 运行时的原始模型指令。",
+  "candidate.name": "DSH · DeepSeek Flash v1",
+  "candidate.description": "版本化 DeepSeek 行为配置，包含 DSH 身份、有界工具执行和结果核验。实验功能，可切回 Codex 默认。"
+}

@@ -1,0 +1,3 @@
+import {CodexEngineService} from '../../engine/lib/plugin.js';
+export const manifest={id:'engine-codex',type:'engine',version:'0.1.0',name:{'zh-CN':'Codex 执行引擎',en:'Codex engine'},capabilities:['tools','queue','steer','resume','mcp','skills']};
+export function apply(ctx,host){ctx.effect(()=>host.registerEngine('codex',{capabilities:{computerUse:true,historyPages:true,tools:true,queue:true,autoQueue:true,steer:true,resume:true,fork:true,move:true,images:true,fullAccess:true,bash:true,mcp:true,skills:true},async create(options){let service;const fiber=ctx.plugin(inner=>{service=new CodexEngineService(inner,options);});await fiber;return{engine:service.engine,dispose:()=>fiber.dispose()};}}));}

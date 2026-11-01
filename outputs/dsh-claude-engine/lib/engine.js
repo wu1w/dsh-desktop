@@ -16,7 +16,9 @@ export class ClaudeCodeEngine extends EventEmitter {
     super();this.setMaxListeners(50);this.options=options;this.locale=options.locale??'zh-CN';
     if(!options.dataDir)throw this._error('INVALID_PATH','invalid_path');
     this.dataDir=path.resolve(options.dataDir);this.configDir=path.join(this.dataDir,'claude');
-    this.model=options.model??'deepseek-v4.1-flash';this.provider='opencode_go_anthropic';this.baseUrl=options.baseUrl;this.binary=options.claudeBinary??options.binary??path.join(homedir(),'.local/bin/claude');
+    // Windows 上可执行文件必须带扩展名，否则 Node 解析会失败。
+    const defaultBinary=process.platform==='win32'?path.join(homedir(),'.local','bin','claude.exe'):path.join(homedir(),'.local/bin/claude');
+    this.model=options.model??'deepseek-v4.1-flash';this.provider='opencode_go_anthropic';this.baseUrl=options.baseUrl;this.binary=options.claudeBinary??options.binary??defaultBinary;
     this.resolveApiKey=options.resolveApiKey;this.requestTimeoutMs=options.idleTimeoutMs??options.requestTimeoutMs??300000;this.approvalTimeoutMs=options.approvalTimeoutMs??120000;
     this.turnTimeoutMs=options.turnTimeoutMs??null;this.interruptTimeoutMs=options.interruptTimeoutMs??5000;this.shutdownTimeoutMs=options.shutdownTimeoutMs??5000;this.checkpointIntervalMs=options.checkpointIntervalMs??1000;
     this.rows=new Map();this.inflight=new Map();this.pending=new Map();this.writes=Promise.resolve();this.serial=new Map();this.loaded=false;this.starting=null;this._ready=false;this.disposed=false;this.disposing=false;this.secret=null;

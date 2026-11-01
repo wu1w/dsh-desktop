@@ -130,6 +130,9 @@ export async function startHost({ dataDir, port = 0, autoStart = true, binary, e
   const broadcast = value => clients.broadcast(value);
   const broadcastState = () => broadcast({ type: 'state', state: publicState() });
   modelProviders=await new ModelProviders({dataDir,legacyModels:state.models,resolveLegacyKey:resolveGoKey,isBusy:()=>switching||!!engine?.activeTurns.size||state.sessions.some(s=>['running','waiting','uncertain'].includes(s.runRecovery?.status)),isUsed:(id,model)=>state.sessions.some(s=>modelProviders.models().some(m=>m.providerId===id&&(!model||m.modelId===model)&&m.id===s.model)),onChange:()=>{state.models=modelProviders.models();broadcastState();}}).load();
+  // 持久化的 models 可能是旧列表（换过 provider 或重建过索引），启动时以当前 provider 为准，
+  // 否则新建会话会因模型不在列表里被判 INVALID_REQUEST。
+  state.models=modelProviders.models(selectedEngine);
   state.models=modelProviders.models();
   const resolveModel=(selection,engineId=selectedEngine)=>{const connection=modelProviders.resolve(selection,engineId);return {...connection,provider:connection.provider==='opencode_go'?'opencode_go':'dsh_'+connection.provider,baseUrl:`http://127.0.0.1:${address.port}/model-api/${connection.provider}/${connection.api}`,bearer:modelBearer,models:modelProviders.state.providers.find(p=>p.id===connection.provider).models};};
   const getProject = id => state.projects.find(p => p.id === id) ?? fail('NOT_FOUND');

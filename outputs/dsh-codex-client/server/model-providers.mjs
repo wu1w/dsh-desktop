@@ -30,11 +30,11 @@ function normalize(input,old){
 export class ModelProviders{
   constructor({dataDir,legacyModels,resolveLegacyKey,isBusy=()=>false,isUsed=()=>false,onChange=()=>{},fetchImpl=fetch}){this.file=path.join(dataDir,'model-providers.json');this.legacyModels=legacyModels;this.resolveLegacyKey=resolveLegacyKey;this.isBusy=isBusy;this.isUsed=isUsed;this.onChange=onChange;this.fetch=fetchImpl;this.writing=Promise.resolve();this.controllers=new Set();this.state=null;}
   async load(){try{const info=await lstat(this.file);if(!info.isFile()||info.isSymbolicLink()||info.size>4*1024*1024||(process.platform!=='win32'&&(info.mode&0o077)))fail('MODEL_STORAGE_INVALID');const value=JSON.parse(await readFile(this.file,'utf8'));if(value.version!==1||typeof value.revision!=='string'||!Array.isArray(value.providers)||value.providers.length>100)fail('MODEL_STORAGE_INVALID');value.providers=value.providers.map(p=>normalize(p,p));if(new Set(value.providers.map(p=>p.id)).size!==value.providers.length)fail('MODEL_STORAGE_INVALID');this.state=value;}catch(error){if(error.code!=='ENOENT')throw error;this.state={version:1,revision:randomUUID(),providers:[
-    // 默认让用户填 DeepSeek 官方密钥：模型定义对齐 DSH Harness 的 llm-deepseek。
+    // 默认让用户填 DeepSeek 官方密钥。官方 /models 只声明 anthropic_messages 能力，
+    // 所以 Claude Code 走原生 Anthropic 端点，Codex 走宿主转换（responses -> completions）。
     {id:'deepseek',name:'DeepSeek',api:'openai-completions',baseURL:'https://api.deepseek.com',auth:'key',enabled:true,models:[
-      {id:'deepseek-flash',name:'DeepSeek-V41-Flash',contextWindow:1_000_000,maxTokens:32000,reasoning:true},
-      {id:'deepseek-chat',name:'DeepSeek Chat',contextWindow:128_000,maxTokens:8192,reasoning:false}
-    ]},
+      {id:'deepseek-flash',name:'DeepSeek-V4.1-Flash',contextWindow:1_048_576,maxTokens:393_216,reasoning:true}
+    ],endpoints:{'claude-code':{api:'anthropic-messages',baseURL:'https://api.deepseek.com/anthropic'}}},
     // Harness 既有凭据的兜底路由：支持全部三个引擎，凭据可用时置顶。
     {id:'opencode_go',name:'OpenCode Go',api:'anthropic-messages',baseURL:'https://opencode.ai/inference/go/anthropic',auth:'legacy',legacy:true,enabled:true,models:[{id:'deepseek-v4.1-flash',name:'DeepSeek V4.1 Flash',contextWindow:1_000_000,maxTokens:32000,reasoning:true}],endpoints:{codex:{api:'openai-responses',baseURL:'https://opencode.ai/inference/go/openai/v1'},'claude-code':{api:'anthropic-messages',baseURL:'https://opencode.ai/inference/go/anthropic'},'dsh-native':{api:'anthropic-messages',baseURL:'https://opencode.ai/inference/go/anthropic'}}}
   ]};}
@@ -72,9 +72,14 @@ export class ModelProviders{
     const translating=!!wire.translateTo;
     try{const credential=await this.credential(p);
       const upstreamApi=translating?p.api:api,upstreamAction=translating?'chat/completions':action;
-      const upstreamBody=translating?JSON.stringify(translateRequest(api,body)):text;
+      let upstreamBody=translating?JSON.stringify(translateRequest(api,body)):text;
+      // 有些 OpenAI 兼容服务（含 DeepSeek 官方）不认 developer 角色，会直接 422。
+      // system 是各家的公共子集，语义差异可以接受。
+      if(upstreamApi==='openai-completions'){
+        try{const parsed=JSON.parse(upstreamBody);if(Array.isArray(parsed.messages)){let changed=false;for(const message of parsed.messages){if(message&&message.role==='developer'){message.role='system';changed=true;}}if(changed)upstreamBody=JSON.stringify(parsed);}}catch{}
+      }
       const upstream=await this.fetch(providerURL(translating?p.baseURL:wire.baseURL,upstreamApi,upstreamAction),{method:'POST',headers:forwardHeaders(request.headers,upstreamApi,credential),body:upstreamBody,redirect:'error',signal:controller.signal});
-      if(!upstream.ok){response.writeHead(upstream.status,{'content-type':'application/json'});response.end(JSON.stringify({error:{type:'provider_error',message:upstream.status===401||upstream.status===403?'MODEL_AUTH_FAILED':'MODEL_REQUEST_FAILED'}}));await upstream.body?.cancel();return;}
+      if(!upstream.ok){const detail=await upstream.text().catch(()=>'');console.error('[dsh-proxy] upstream',upstream.status,upstreamApi,detail.slice(0,400));response.writeHead(upstream.status,{'content-type':'application/json'});response.end(JSON.stringify({error:{type:'provider_error',message:upstream.status===401||upstream.status===403?'MODEL_AUTH_FAILED':'MODEL_REQUEST_FAILED'}}));return;}
       if(translating){
         if(body.stream){
           response.writeHead(200,{'content-type':'text/event-stream; charset=utf-8','cache-control':'no-store'});

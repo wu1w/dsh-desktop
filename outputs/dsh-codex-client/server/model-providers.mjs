@@ -3,7 +3,8 @@ import path from 'node:path';
 import {randomUUID} from 'node:crypto';
 import {once} from 'node:events';
 import {modelDiscoveryURL,readDiscoveredModels} from './model-discovery.mjs';
-import {MODEL_PROTOCOLS,providerPresets,protocolForEngine,modelSelection} from '../shared/model-providers.js';
+import {MODEL_PROTOCOLS,providerPresets,protocolForEngine,modelSelection,canTranslate} from '../shared/model-providers.js';
+import {translateRequest,translateJson,createStreamTranslator} from './wire-translate.mjs';
 
 const fail=code=>{throw Object.assign(new Error(code),{code});};
 async function readText(stream,limit){const parts=[];let size=0;for await(const chunk of stream){const bytes=Buffer.from(chunk);size+=bytes.length;if(size>limit)fail('INVALID_REQUEST');parts.push(bytes);}return Buffer.concat(parts).toString('utf8');}
@@ -28,9 +29,22 @@ function normalize(input,old){
 }
 export class ModelProviders{
   constructor({dataDir,legacyModels,resolveLegacyKey,isBusy=()=>false,isUsed=()=>false,onChange=()=>{},fetchImpl=fetch}){this.file=path.join(dataDir,'model-providers.json');this.legacyModels=legacyModels;this.resolveLegacyKey=resolveLegacyKey;this.isBusy=isBusy;this.isUsed=isUsed;this.onChange=onChange;this.fetch=fetchImpl;this.writing=Promise.resolve();this.controllers=new Set();this.state=null;}
-  async load(){try{const info=await lstat(this.file);if(!info.isFile()||info.isSymbolicLink()||info.size>4*1024*1024||(info.mode&0o077))fail('MODEL_STORAGE_INVALID');const value=JSON.parse(await readFile(this.file,'utf8'));if(value.version!==1||typeof value.revision!=='string'||!Array.isArray(value.providers)||value.providers.length>100)fail('MODEL_STORAGE_INVALID');value.providers=value.providers.map(p=>normalize(p,p));if(new Set(value.providers.map(p=>p.id)).size!==value.providers.length)fail('MODEL_STORAGE_INVALID');this.state=value;}catch(error){if(error.code!=='ENOENT')throw error;this.state={version:1,revision:randomUUID(),providers:[{id:'opencode_go',name:'OpenCode Go',api:'anthropic-messages',baseURL:'https://opencode.ai/inference/go/anthropic',auth:'legacy',legacy:true,enabled:true,models:(this.legacyModels??[{id:'deepseek-v4.1-flash',name:'DeepSeek V4.1 Flash'}]).map(m=>({...m,contextWindow:1_000_000,maxTokens:32000,reasoning:true})),endpoints:{codex:{api:'openai-responses',baseURL:'https://opencode.ai/inference/go/openai/v1'},'claude-code':{api:'anthropic-messages',baseURL:'https://opencode.ai/inference/go/anthropic'},'dsh-native':{api:'anthropic-messages',baseURL:'https://opencode.ai/inference/go/anthropic'}}}]};}return this;}
-  public(){return{revision:this.state.revision,presets:providerPresets,providers:this.state.providers.map(({apiKey,...p})=>({...p,keyConfigured:!!apiKey||p.auth==='legacy',engines:['dsh-native','codex','claude-code'].filter(e=>protocolForEngine(p,e))}))};}
-  models(engine){return this.state.providers.filter(p=>p.enabled).flatMap(p=>p.models.map(m=>({...m,id:modelSelection(p.id,m.id),modelId:m.id,providerId:p.id,providerName:p.name,engines:['dsh-native','codex','claude-code'].filter(e=>protocolForEngine(p,e)),available:!engine||!!protocolForEngine(p,engine)})));}
+  async load(){try{const info=await lstat(this.file);if(!info.isFile()||info.isSymbolicLink()||info.size>4*1024*1024||(process.platform!=='win32'&&(info.mode&0o077)))fail('MODEL_STORAGE_INVALID');const value=JSON.parse(await readFile(this.file,'utf8'));if(value.version!==1||typeof value.revision!=='string'||!Array.isArray(value.providers)||value.providers.length>100)fail('MODEL_STORAGE_INVALID');value.providers=value.providers.map(p=>normalize(p,p));if(new Set(value.providers.map(p=>p.id)).size!==value.providers.length)fail('MODEL_STORAGE_INVALID');this.state=value;}catch(error){if(error.code!=='ENOENT')throw error;this.state={version:1,revision:randomUUID(),providers:[
+    // 默认让用户填 DeepSeek 官方密钥：模型定义对齐 DSH Harness 的 llm-deepseek。
+    {id:'deepseek',name:'DeepSeek',api:'openai-completions',baseURL:'https://api.deepseek.com',auth:'key',enabled:true,models:[
+      {id:'deepseek-flash',name:'DeepSeek-V41-Flash',contextWindow:1_000_000,maxTokens:32000,reasoning:true},
+      {id:'deepseek-chat',name:'DeepSeek Chat',contextWindow:128_000,maxTokens:8192,reasoning:false}
+    ]},
+    // Harness 既有凭据的兜底路由：支持全部三个引擎，凭据可用时置顶。
+    {id:'opencode_go',name:'OpenCode Go',api:'anthropic-messages',baseURL:'https://opencode.ai/inference/go/anthropic',auth:'legacy',legacy:true,enabled:true,models:[{id:'deepseek-v4.1-flash',name:'DeepSeek V4.1 Flash',contextWindow:1_000_000,maxTokens:32000,reasoning:true}],endpoints:{codex:{api:'openai-responses',baseURL:'https://opencode.ai/inference/go/openai/v1'},'claude-code':{api:'anthropic-messages',baseURL:'https://opencode.ai/inference/go/anthropic'},'dsh-native':{api:'anthropic-messages',baseURL:'https://opencode.ai/inference/go/anthropic'}}}
+  ]};}
+  // 旧内置路由是否真的有可用凭据；决定它是否置顶。
+  this.legacyReady=await Promise.resolve().then(()=>this.resolveLegacyKey()).then(key=>!!key).catch(()=>false);
+  return this;}
+  // OpenCode Go 是"高优先级"路由：凭据可用时排在最前，模型下拉因此默认选中它。
+  ordered(){const list=this.state.providers,legacy=list.find(p=>p.legacy);return legacy&&this.legacyReady?[legacy,...list.filter(p=>p!==legacy)]:list;}
+  public(){return{revision:this.state.revision,presets:providerPresets,providers:this.ordered().map(({apiKey,...p})=>({...p,keyConfigured:!!apiKey||p.auth==='legacy',engines:['dsh-native','codex','claude-code'].filter(e=>protocolForEngine(p,e))}))};}
+  models(engine){return this.ordered().filter(p=>p.enabled).flatMap(p=>p.models.map(m=>({...m,id:modelSelection(p.id,m.id),modelId:m.id,providerId:p.id,providerName:p.name,engines:['dsh-native','codex','claude-code'].filter(e=>protocolForEngine(p,e)),available:!engine||!!protocolForEngine(p,engine)})));}
   resolve(selection,engine){const match=this.models().find(m=>m.id===selection);if(!match)fail('MODEL_NOT_FOUND');const p=this.state.providers.find(p=>p.id===match.providerId),wire=protocolForEngine(p,engine);if(!wire)fail('MODEL_ENGINE_UNSUPPORTED');return{...match,model:match.modelId,provider:p.id,api:wire.api,baseURL:wire.baseURL,revision:this.state.revision,legacy:p.legacy===true};}
   async credential(p){if(p.auth==='none')return '';if(p.apiKey)return p.apiKey;if(p.auth==='legacy')return this.resolveLegacyKey();fail('MODEL_KEY_REQUIRED');}
   async commit(next){const temporary=this.file+'.'+randomUUID()+'.tmp';let file;try{file=await open(temporary,'wx',0o600);await file.writeFile(JSON.stringify(next,null,2));await file.sync();await file.close();file=null;await rename(temporary,this.file);}finally{await file?.close();await rm(temporary,{force:true});}this.state=next;this.onChange();return this.public();}
@@ -52,10 +66,26 @@ export class ModelProviders{
   async proxy(request,response,{provider,api,action,bearer}){
     if(request.method!=='POST'||request.headers.authorization!==`Bearer ${bearer}`&&request.headers['x-api-key']!==bearer)fail('FORBIDDEN');
     if(!['responses','messages','messages/count_tokens','chat/completions'].includes(action))fail('NOT_FOUND');
-    const p=this.state.providers.find(p=>p.id===provider&&p.enabled);if(!p)fail('MODEL_NOT_FOUND');const wire=[{api:p.api,baseURL:p.baseURL},...Object.values(p.endpoints??{})].find(w=>w.api===api);if(!wire||api==='openai-responses'&&action!=='responses'||api==='anthropic-messages'&&!action.startsWith('messages')||api==='openai-completions'&&action!=='chat/completions')fail('MODEL_ENGINE_UNSUPPORTED');
+    const p=this.state.providers.find(p=>p.id===provider&&p.enabled);if(!p)fail('MODEL_NOT_FOUND');const wire=[{api:p.api,baseURL:p.baseURL},...Object.values(p.endpoints??{})].find(w=>w.api===api)??(canTranslate(p.api,api)?{api,baseURL:p.baseURL,translateTo:p.api}:null);if(!wire||api==='openai-responses'&&action!=='responses'||api==='anthropic-messages'&&!action.startsWith('messages')||api==='openai-completions'&&action!=='chat/completions')fail('MODEL_ENGINE_UNSUPPORTED');
     const text=await readText(request,32*1024*1024);let body;try{body=JSON.parse(text);}catch{fail('INVALID_REQUEST');}if(!p.models.some(m=>m.id===body.model))fail('MODEL_NOT_FOUND');
     const controller=new AbortController();this.controllers.add(controller);const disconnect=()=>controller.abort();response.once('close',disconnect);let idle=setTimeout(disconnect,300000);const touch=()=>{clearTimeout(idle);idle=setTimeout(disconnect,300000);};
-    try{const credential=await this.credential(p);const upstream=await this.fetch(providerURL(wire.baseURL,api,action),{method:'POST',headers:forwardHeaders(request.headers,api,credential),body:text,redirect:'error',signal:controller.signal});if(!upstream.ok){response.writeHead(upstream.status,{'content-type':'application/json'});response.end(JSON.stringify({error:{type:'provider_error',message:upstream.status===401||upstream.status===403?'MODEL_AUTH_FAILED':'MODEL_REQUEST_FAILED'}}));await upstream.body?.cancel();return;}
+    const translating=!!wire.translateTo;
+    try{const credential=await this.credential(p);
+      const upstreamApi=translating?p.api:api,upstreamAction=translating?'chat/completions':action;
+      const upstreamBody=translating?JSON.stringify(translateRequest(api,body)):text;
+      const upstream=await this.fetch(providerURL(translating?p.baseURL:wire.baseURL,upstreamApi,upstreamAction),{method:'POST',headers:forwardHeaders(request.headers,upstreamApi,credential),body:upstreamBody,redirect:'error',signal:controller.signal});
+      if(!upstream.ok){response.writeHead(upstream.status,{'content-type':'application/json'});response.end(JSON.stringify({error:{type:'provider_error',message:upstream.status===401||upstream.status===403?'MODEL_AUTH_FAILED':'MODEL_REQUEST_FAILED'}}));await upstream.body?.cancel();return;}
+      if(translating){
+        if(body.stream){
+          response.writeHead(200,{'content-type':'text/event-stream; charset=utf-8','cache-control':'no-store'});
+          const translator=createStreamTranslator(api,body.model,response),decoder=new TextDecoder();
+          for await(const chunk of upstream.body){touch();translator.push(decoder.decode(chunk,{stream:true}));}
+          translator.finish();response.end();return;
+        }
+        const raw=await readText(upstream.body,32*1024*1024);let json=null;try{json=JSON.parse(raw);}catch{json=null;}
+        if(!json){response.writeHead(502,{'content-type':'application/json'});response.end(JSON.stringify({error:{type:'provider_error',message:'MODEL_REQUEST_FAILED'}}));return;}
+        response.writeHead(200,{'content-type':'application/json','cache-control':'no-store'});response.end(JSON.stringify(translateJson(api,json,body.model)));return;
+      }
       response.writeHead(upstream.status,{'content-type':upstream.headers.get('content-type')??'application/json','cache-control':'no-store'});for await(const chunk of upstream.body){touch();if(!response.write(chunk))await once(response,'drain',{signal:controller.signal});}response.end();
     }catch{if(!response.headersSent){response.writeHead(502,{'content-type':'application/json'});response.end(JSON.stringify({error:{type:'provider_error',message:'MODEL_REQUEST_FAILED'}}));}else response.destroy();}finally{clearTimeout(idle);response.off('close',disconnect);this.controllers.delete(controller);}
   }

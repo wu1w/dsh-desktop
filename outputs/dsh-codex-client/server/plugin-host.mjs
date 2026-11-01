@@ -48,7 +48,7 @@ export class PluginHost{
   list(){return [...this.records.values()].map(record=>({...record.manifest,enabled:record.enabled,active:record.active,error:record.error,builtin:record.builtin,revision:record.revision??(record.builtin?null:'legacy'),canRollback:this.history(record.manifest.id).some(row=>row.revision!==record.revision)}));}
   async _save(){
     await mkdir(this.dataDir,{recursive:true,mode:0o700});const temporary=path.join(this.dataDir,'.plugins.'+randomUUID()+'.tmp');let file;
-    try{file=await open(temporary,'wx',0o600);await file.writeFile(JSON.stringify(this.settings,null,2)+'\n');await file.sync();await file.close();file=null;await rename(temporary,path.join(this.dataDir,'plugins.json'));const directory=await open(this.dataDir,'r');try{await directory.sync();}finally{await directory.close();}}
+    try{file=await open(temporary,'wx',0o600);await file.writeFile(JSON.stringify(this.settings,null,2)+'\n');await file.sync();await file.close();file=null;await rename(temporary,path.join(this.dataDir,'plugins.json'));if(process.platform!=='win32'){const directory=await open(this.dataDir,'r');try{await directory.sync();}finally{await directory.close();}}}
     finally{await file?.close();await rm(temporary,{force:true}).catch(()=>{});}
   }
   _sequence(work){if(this.closed)return Promise.reject(fault('PLUGIN_HOST_CLOSED'));const run=this.serial.then(work,work);this.serial=run.catch(()=>{});return run;}

@@ -2,6 +2,7 @@ import {buildComputerHelper} from './build-computer.mjs';
 await buildComputerHelper();
 import { build } from 'esbuild';
 import { mkdir, copyFile, cp, rm } from 'node:fs/promises';
+import { fileURLToPath } from 'node:url';
 import {buildPtyHelper} from './build-pty.mjs';
 await buildPtyHelper();
 const engine = new URL('../../dsh-codex-engine/', import.meta.url);
@@ -13,7 +14,7 @@ for (const entry of ['lib', 'locale', 'package.json']) await cp(new URL(entry, e
 await mkdir(new URL('../dist/', import.meta.url), { recursive: true });
 // Ship the production React runtime. Keep application names/source maps useful
 // for local diagnostics; that does not require development React checks.
-await build({ entryPoints: [new URL('../src/main.jsx', import.meta.url).pathname], bundle: true, outdir: new URL('../dist/', import.meta.url).pathname, minify: false, sourcemap: true, define:{'process.env.NODE_ENV':'"production"'}, format:'esm', jsx: 'automatic', loader: { '.svg': 'dataurl' }, target: 'chrome130' });
+await build({ entryPoints: [fileURLToPath(new URL('../src/main.jsx', import.meta.url))], bundle: true, outdir: fileURLToPath(new URL('../dist/', import.meta.url)), minify: false, sourcemap: true, define:{'process.env.NODE_ENV':'"production"'}, format:'esm', jsx: 'automatic', loader: { '.svg': 'dataurl' }, target: 'chrome130' });
 await copyFile(new URL('../src/index.html', import.meta.url), new URL('../dist/index.html', import.meta.url));
 
 try { await cp(new URL('../../dsh-claude-engine/',import.meta.url),new URL('../claude-engine/',import.meta.url),{recursive:true,filter:source=>!source.includes('/node_modules/')&&!source.endsWith('/node_modules')&&!source.includes('/test/')&&!source.endsWith('/test')}); } catch(error) { if(error.code!=='ENOENT')throw error; }

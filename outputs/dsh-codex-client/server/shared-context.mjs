@@ -12,7 +12,8 @@ export class SharedContext {
     await mkdir(this.dir,{recursive:true,mode:0o700});if((await lstat(this.dir)).isSymbolicLink())fail('CONTEXT_INVALID');
     const bytes=Buffer.from(JSON.stringify({version:1,...value}));if(bytes.length>LIMIT)fail('CONTEXT_TOO_LARGE');
     const file=await open(path.join(this.dir,id+'.json'),'wx',0o600);try{await file.writeFile(bytes);await file.sync();}finally{await file.close();}
-    const dir=await open(this.dir,'r');try{await dir.sync();}finally{await dir.close();}return id;
+    // Windows 不支持对目录 fsync（EPERM），跳过；POSIX 上保持原行为。
+    if(process.platform!=='win32'){const dir=await open(this.dir,'r');try{await dir.sync();}finally{await dir.close();}}return id;
   }
   async read(id){
     if(!uuid.test(id))fail('CONTEXT_INVALID');const file=path.join(this.dir,id+'.json'),info=await lstat(file);

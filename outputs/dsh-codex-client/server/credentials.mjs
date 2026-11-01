@@ -8,7 +8,9 @@ export async function resolveGoKey() {
   if (process.env.DSH_OPENCODE_GO_KEY) return process.env.DSH_OPENCODE_GO_KEY;
   const original = path.join(homedir(), '.dsh', '.credentials.yaml');
   const before = await stat(original);
-  if ((before.mode & 0o077) !== 0) throw new Error('CREDENTIAL_PERMISSIONS');
+  // Windows 的 stat().mode 恒为 0o100666，这个 POSIX 权限检查会必然失败，
+  // 导致密钥永远取不到。NTFS ACL 才是 Windows 上的等价物，这里跳过。
+  if (process.platform !== 'win32' && (before.mode & 0o077) !== 0) throw new Error('CREDENTIAL_PERMISSIONS');
   const temporary = await mkdtemp(path.join(tmpdir(), 'dsh-codex-credential-'));
   const ctx = new Context();
   try {
@@ -16,7 +18,8 @@ export async function resolveGoKey() {
     const copied = path.join(temporary, 'credentials.yaml');
     await copyFile(original, copied); await chmod(copied, 0o600);
     await ctx.plugin(Credentials, { path: copied, watch: false });
-    const hit = await ctx.credentials.resolve('DEEPSEEK_API_KEY');
+    // OpenCode Go 的额度只认 OPENCODE_GO_API_KEY；DEEPSEEK_API_KEY 打这个端点会 401。
+    const hit = (await ctx.credentials.resolve('OPENCODE_GO_API_KEY')) ?? (await ctx.credentials.resolve('DEEPSEEK_API_KEY'));
     if (!hit?.value) throw new Error('MISSING_GO_CREDENTIAL');
     return hit.value;
   } finally {

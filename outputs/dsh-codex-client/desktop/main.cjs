@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, dialog, shell, Menu, screen, powerSaveBlocker, powerMonitor } = require('electron');
+const { app, BrowserWindow, ipcMain, dialog, shell, Menu, screen, powerSaveBlocker, powerMonitor, Tray, nativeImage } = require('electron');
 const path = require('node:path');
 const {RendererRecovery,ActivityPowerGuard}=require('./reliability.cjs');
 const {
@@ -12,6 +12,53 @@ let mainWindow;
 let origin;
 let locale='en';
 let store;
+// 托盘常驻：与 DeepSeek Harness 原版一致，关闭/最小化后留在右下角通知区。
+// 用户可在托盘菜单里切换为「关闭即退出」。
+let tray = null;
+let trayPref = 'tray';
+let trayHintShown = false;
+function trayLabels() {
+  return locale === 'en'
+    ? { open: 'Open DSH', closeToTray: 'Close to tray', quit: 'Quit DSH', tooltip: 'DSH', hint: 'DSH is still running. Use the tray icon to reopen or quit.' }
+    : { open: '打开 DSH', closeToTray: '关闭时最小化到托盘', quit: '退出 DSH', tooltip: 'DSH', hint: 'DSH 仍在后台运行。可从右下角托盘图标重新打开或退出。' };
+}
+function showMainWindow() {
+  if (!mainWindow || mainWindow.isDestroyed()) return;
+  if (mainWindow.isMinimized()) mainWindow.restore();
+  mainWindow.show();
+  mainWindow.focus();
+}
+function hideToTray() {
+  if (!mainWindow || mainWindow.isDestroyed()) return;
+  mainWindow.hide();
+  if (!trayHintShown && tray?.displayBalloon) {
+    trayHintShown = true;
+    try { tray.displayBalloon({ title: 'DSH', content: trayLabels().hint }); } catch {}
+  }
+}
+function createTray() {
+  if (tray) return;
+  const iconPath = path.join(__dirname, '..', 'assets', process.platform === 'win32' ? 'tray.ico' : 'icon.png');
+  tray = new Tray(nativeImage.createFromPath(iconPath));
+  tray.setToolTip(trayLabels().tooltip);
+  const rebuild = () => {
+    const labels = trayLabels();
+    tray.setContextMenu(Menu.buildFromTemplate([
+      { label: labels.open, click: () => showMainWindow() },
+      { type: 'separator' },
+      {
+        label: labels.closeToTray, type: 'checkbox', checked: trayPref === 'tray',
+        click: (item) => { trayPref = item.checked ? 'tray' : 'quit'; void saveWindowState()?.catch(() => {}); },
+      },
+      { type: 'separator' },
+      { label: labels.quit, click: () => { void requestTransition('quit'); } },
+    ]));
+  };
+  tray.rebuildMenu = rebuild;
+  tray.on('click', () => showMainWindow());
+  tray.on('double-click', () => showMainWindow());
+  rebuild();
+}
 let closeState={dirty:false,running:false};
 let closeReady=false;
 let transition;
@@ -25,12 +72,14 @@ const rendererRecovery=new RendererRecovery();
 const handshake=new CloseHandshake({send:value=>mainWindow.webContents.send('dsh:before-close',value)});
 
 app.setName('DSH');
+// Windows 任务栏按 AppUserModelID 归组并取图标；与打包时的 bundle id 保持一致。
+if(process.platform==='win32')app.setAppUserModelId('com.deepseek.dsh.codex');
 app.setPath('userData',process.env.DSH_DESKTOP_USER_DATA?path.resolve(process.env.DSH_DESKTOP_USER_DATA):path.join(app.getPath('appData'),'DSH-Codex'));
 
 function t(key,params) {return translator(locale)(key,params);}
 function stopDesktopRuntime() {rendererRecovery.cancel();powerGuard?.stop();}
 function captureState() {
-  return {locale,...(mainWindow&&!mainWindow.isDestroyed()?{bounds:mainWindow.getNormalBounds(),maximized:mainWindow.isMaximized(),fullScreen:mainWindow.isFullScreen()}:{})};
+  return {locale,tray:trayPref,...(mainWindow&&!mainWindow.isDestroyed()?{bounds:mainWindow.getNormalBounds(),maximized:mainWindow.isMaximized(),fullScreen:mainWindow.isFullScreen()}:{})};
 }
 function saveWindowState() {
   clearTimeout(stateTimer);
@@ -46,6 +95,7 @@ function sendAction(action) {
 function applyMenu() {
   Menu.setApplicationMenu(Menu.buildFromTemplate(menuTemplate({locale,send:sendAction,requestReload:()=>{void requestTransition('reload');}})));
   app.setAboutPanelOptions({applicationName:'DSH',applicationVersion:app.getVersion(),copyright:t('aboutDetail')});
+  tray?.rebuildMenu?.();
 }
 async function nativeConfirm({title,detail,params,confirm,cancel='cancel'}) {
   const options={type:'warning',title:'DSH',message:t(title),detail:t(detail,params),buttons:[t(cancel),t(confirm)],defaultId:0,cancelId:0,noLink:true};
@@ -182,10 +232,24 @@ async function createWindow() {
   const {maximized,fullScreen,...bounds}=restored;
   mainWindow=new BrowserWindow({
     ...bounds,minWidth:Math.min(860,primary.workArea.width),minHeight:Math.min(580,primary.workArea.height),
-    show:false,title:'DSH',titleBarStyle:'hidden',trafficLightPosition:{x:15,y:15},backgroundColor:'#ffffff',
+    show:false,title:'DSH',titleBarStyle:'hidden',
+    // 窗口/任务栏图标使用 DeepSeek Harness 官方图标（Windows 取 .ico 多尺寸）。
+    icon:path.join(__dirname,'..','assets',process.platform==='win32'?'icon.ico':'icon.png'),
+    ...(process.platform==='win32'
+      ? {titleBarOverlay:{color:'#ffffff',symbolColor:'#1f2328',height:38}}
+      : {trafficLightPosition:{x:15,y:15}}),
+    backgroundColor:'#ffffff',
     webPreferences:{preload:path.join(__dirname,'preload.cjs'),nodeIntegration:false,contextIsolation:true,sandbox:true,webSecurity:true,webviewTag:false,allowRunningInsecureContent:false,navigateOnDragDrop:false},
   });
   const win=mainWindow;
+
+  // Windows 的 titleBarOverlay 会在右上角绘制最小化/最大化/关闭，
+  // 与应用自己的标题栏按钮重叠。给标题栏预留这块空间。
+  if(process.platform==='win32'){
+    const css='header.titlebar{padding-right:140px !important}'
+      +'@supports (padding-right: env(titlebar-area-width)){header.titlebar{padding-right:calc(100vw - env(titlebar-area-width)) !important}}';
+    win.webContents.on('did-finish-load',()=>{void win.webContents.insertCSS(css).catch(()=>{});});
+  }
   win.webContents.setWindowOpenHandler(({url})=>{
     if(isExternalWebUrl(url))void shell.openExternal(url).catch(()=>{});
     return {action:'deny'};
@@ -215,7 +279,14 @@ async function createWindow() {
   };
   win.webContents.on('render-process-gone',recoverRenderer);
   for(const event of ['resize','move','maximize','unmaximize','enter-full-screen','leave-full-screen'])win.on(event,scheduleStateSave);
-  win.on('close',event=>{if(!approvedQuit){event.preventDefault();void requestTransition('quit');}});
+  win.on('close',event=>{
+    if(approvedQuit)return;
+    event.preventDefault();
+    // 托盘常驻模式下关闭只是隐藏；只有选择"退出"才走落盘握手再真正退出。
+    if(trayPref==='tray'&&tray){hideToTray();return;}
+    void requestTransition('quit');
+  });
+  win.on('minimize',()=>{if(trayPref==='tray'&&tray)hideToTray();});
   win.on('closed',()=>{rendererRecovery.cancel();mainWindow=null;});
   win.once('ready-to-show',()=>{if(maximized)win.maximize();if(fullScreen)win.setFullScreen(true);win.show();});
   await win.loadURL(host.url);
@@ -225,13 +296,13 @@ if(!app.requestSingleInstanceLock())app.quit();
 else {
   app.on('second-instance',()=>{if(mainWindow&&!mainWindow.isDestroyed()){if(mainWindow.isMinimized())mainWindow.restore();mainWindow.show();mainWindow.focus();}});
   app.on('before-quit',event=>{if(!approvedQuit){event.preventDefault();void requestTransition('quit');}});
-  app.on('will-quit',stopDesktopRuntime);
+  app.on('will-quit',()=>{tray?.destroy();tray=null;stopDesktopRuntime();});
   app.on('activate',()=>{if(mainWindow&&!mainWindow.isDestroyed()){mainWindow.show();mainWindow.focus();}});
   app.on('certificate-error',(event,_contents,_url,_error,_certificate,callback)=>{event.preventDefault();callback(false);});
   app.whenReady().then(async()=>{
     if(quitRequested)return;
     store=new DesktopStateStore(path.join(process.env.DSH_CLIENT_DATA_DIR||app.getPath('userData'),'desktop-state.json'));
-    const saved=store.read();locale=normalizeLocale(saved.locale||app.getLocale());applyMenu();
+    const saved=store.read();locale=normalizeLocale(saved.locale||app.getLocale());trayPref=saved.tray==='quit'?'quit':'tray';applyMenu();
     installIpc();
     const {startHost}=await import('../server/index.mjs');
     const computerRuntime=require('./computer-runtime.cjs').createComputerRuntime({app,locale:()=>locale});
@@ -241,6 +312,7 @@ else {
     powerGuard=new ActivityPowerGuard({blocker:powerSaveBlocker,powerMonitor,readState:()=>host?.state()});powerGuard.start();
     origin=new URL(host.url).origin;
     await createWindow();
+    createTray();
   }).catch(async error=>{
     const supervised=process.env.DSH_PROCESS_SUPERVISED==='1';
     // A restart can arrive before the dead process's data lock becomes stale.

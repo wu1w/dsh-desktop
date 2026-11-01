@@ -98,7 +98,7 @@ export class GitDraftStore{
       cleanup={id:randomUUID(),owner:this.activeOperation,run:async()=>{if(handle){identity??=await handle.stat();await handle.close();handle=null;}const current=await lstat(temporary).catch(error=>{if(error.code==='ENOENT')return null;throw error;});if(current&&identity&&current.dev===identity.dev&&current.ino===identity.ino&&!current.isSymbolicLink())await unlink(temporary);}};this.cleanupTasks.add(cleanup);identity=await handle.stat();
       await handle.writeFile(bytes);await handle.sync();await handle.close();handle=null;
       await assertLock();await this._directory();if((await this._read()).key!==expected)throw fault('GIT_DRAFT_CHANGED');await assertLock();
-      await rename(temporary,this.file);const directory=await open(this.dataDir,constants.O_RDONLY);try{await directory.sync();}finally{await directory.close();}
+      await rename(temporary,this.file);if(process.platform!=='win32'){const directory=await open(this.dataDir,constants.O_RDONLY);try{await directory.sync();}finally{await directory.close();}}
     }finally{if(cleanup)await this._cleanup(cleanup);}
   }
   get(value){let id;try{id=projectId(value);}catch(error){return Promise.reject(error);}return this._queue(async()=>{const current=await this._read(),rows=current.bytes?parse(current.bytes):new Map();return rows.has(id)?{...rows.get(id)}:null;});}

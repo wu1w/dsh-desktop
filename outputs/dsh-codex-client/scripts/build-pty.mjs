@@ -5,7 +5,8 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 const run = promisify(execFile);
 export async function buildPtyHelper({ appRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..') } = {}) {
-  if (process.platform !== 'darwin') throw Object.assign(new Error('PTY_UNSUPPORTED'), { code:'PTY_UNSUPPORTED' });
+  // Windows 上没有 POSIX PTY 辅助程序；跳过而不是中断整个构建。
+  if (process.platform !== 'darwin') return null;
   const target = path.join(appRoot,'native/bin/dsh-pty-helper');
   await mkdir(path.dirname(target),{recursive:true});
   const temporary = target+'.'+process.pid+'.tmp';

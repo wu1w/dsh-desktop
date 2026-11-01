@@ -42,15 +42,19 @@ import {ClientStateStore,validAttachmentDrafts} from './client-state.mjs';
 import { IntegrationManager } from './integrations.mjs';
 
 const root = path.resolve(fileURLToPath(new URL('../', import.meta.url)));
-const platformRuntime = process.arch === 'arm64'
-  ? '@openai/codex-darwin-arm64/vendor/aarch64-apple-darwin/bin/codex'
-  : '@openai/codex-darwin-x64/vendor/x86_64-apple-darwin/bin/codex';
+const platformRuntime = process.platform === 'win32'
+  ? (process.arch === 'arm64'
+      ? '@openai/codex-win32-arm64/vendor/aarch64-pc-windows-msvc/bin/codex.exe'
+      : '@openai/codex-win32-x64/vendor/x86_64-pc-windows-msvc/bin/codex.exe')
+  : (process.arch === 'arm64'
+      ? '@openai/codex-darwin-arm64/vendor/aarch64-apple-darwin/bin/codex'
+      : '@openai/codex-darwin-x64/vendor/x86_64-apple-darwin/bin/codex');
 const codes = {
   INVALID_PATH: ['路径无效。','Invalid path.'], OUTSIDE_PROJECT: ['只能访问所选项目内的文件。','Files must be inside the selected project.'], FILE_LIMIT: ['文件超过预览大小限制。','File exceeds the preview limit.'], BINARY_FILE: ['此文件需要使用系统应用打开。','Open this file with a system application.'], FILE_CHANGED: ['文件已在其他地方修改，请重新打开后保存。','The file changed elsewhere. Reopen it before saving.'], ATTACHMENT_LIMIT: ['附件总大小不能超过 10 MB。','Attachments cannot exceed 10 MB.'], INVALID_ATTACHMENT: ['附件格式无效。','Invalid attachment.'], NOT_FOUND: ['项目或聊天不存在。','Project or chat not found.'], ENGINE_DISABLED: ['执行引擎已停用，请在设置中启用。','Enable the execution engine in Settings.'], INVALID_REQUEST: ['请求格式无效。','Invalid request.'], ENGINE_BUSY: ['请先停止正在执行的任务。','Stop the active task first.'], ENOENT: ['文件或文件夹不存在。','File or folder not found.'], FORBIDDEN: ['此请求没有访问权限。','This request is not authorized.'], CREDENTIAL_PERMISSIONS: ['现有 DSH 凭据文件权限不正确。','The DSH credential file permissions are unsafe.'], MISSING_GO_CREDENTIAL: ['没有找到现有 OpenCode Go 凭据。','The existing OpenCode Go credential was not found.'], CREDENTIAL_STORE_CHANGED: ['凭据状态发生变化，请重新启动。','Credential state changed. Restart the app.'], INTERNAL: ['操作失败，请查看本地日志。','Action failed. Check the local log.']
 };
 Object.assign(codes,{
   UNSUPPORTED_INPUT:['此引擎暂不支持这种附件，请切换到 Codex 引擎。','This engine does not support this attachment. Select the Codex engine.'],UNSUPPORTED_PERMISSION:['此引擎暂不支持完全访问，请使用只读或工作区访问。','This engine supports read-only or workspace access.'],UNSUPPORTED_STEER:['此引擎暂不支持运行中引导，可先排队。','This engine does not support in-flight steering. Queue the message instead.'],
-  DATA_IN_USE:['此 DSH 数据目录已由另一个实例使用。','Another DSH instance is using this data folder.'],DATA_LOCK_LOST:['数据目录锁已失效，正在安全停止此实例。','The data lock was lost. This instance is stopping.'],
+  MODEL_KEY_REQUIRED:['还没有配置模型 API 密钥。请到「设置 → 模型」填写 DeepSeek 官方密钥，或使用已有的 OpenCode Go 凭据。','No model API key is configured. Add a DeepSeek key in Settings → Models, or use existing OpenCode Go credentials.'],DATA_IN_USE:['此 DSH 数据目录已由另一个实例使用。','Another DSH instance is using this data folder.'],DATA_LOCK_LOST:['数据目录锁已失效，正在安全停止此实例。','The data lock was lost. This instance is stopping.'],
   HOST_STOPPING:['应用正在退出，请稍后重新打开。','The app is closing. Reopen it when shutdown completes.'],
   LINE_TOO_LONG:['此响应超过当前加载上限。会话已保留。','This response exceeds the current loading limit. The session is preserved.'],
   HISTORY_INVALID_PAGE:['历史记录暂时无法继续加载，请重试。','Earlier messages could not be loaded. Try again.'],HISTORY_UNSUPPORTED:['此引擎暂不支持分段加载历史。','This engine does not support loading earlier message pages.'],
@@ -241,7 +245,10 @@ export async function startHost({ dataDir, port = 0, autoStart = true, binary, e
   async function readHistory(session,cursor,locale='zh-CN') {
     return history.earlier(session,requireEngine(session),getSessionWorkspace(session).path,cursor,locale);
   }
-  const selectionBusy=()=>Boolean(engine?.activeTurns.size||state.sessions.some(s=>['running','waiting','uncertain'].includes(s.runRecovery?.status))||plugins.activities().some(a=>a.count>0&&!['terminal','command'].includes(a.kind)&&!a.id.endsWith('-connection')));
+  // 只有"当前选中引擎"的会话才可能正在执行。其他引擎遗留的 running/waiting/uncertain
+  // 若也计入忙碌，会与 recover()（它只处理当前引擎的会话）形成死锁：切不走 → 不修复 → 不让切。
+  const sessionsBusy=()=>state.sessions.some(s=>(s.engineId??'codex')===selectedEngine&&['running','waiting','uncertain'].includes(s.runRecovery?.status));
+  const selectionBusy=()=>Boolean(engine?.activeTurns.size||sessionsBusy()||plugins.activities().some(a=>a.count>0&&!['terminal','command'].includes(a.kind)&&!a.id.endsWith('-connection')));
   async function requestEngine(id){
     if(!plugins.engines.has(id))fail('ENGINE_PLUGIN_DISABLED');
     if(id===selectedEngine){state.preferences.pendingEngine=null;await save();if(!engine?.ready)await alterEngine(true);broadcastState();return;}
@@ -252,7 +259,7 @@ export async function startHost({ dataDir, port = 0, autoStart = true, binary, e
     if(!plugins.engines.has(id))fail('ENGINE_PLUGIN_DISABLED');
     if(id===selectedEngine){if(!engine?.ready)await alterEngine(true);return;}
     // No input can be admitted while a complete handoff is being prepared.
-    if(engine?.activeTurns.size||state.sessions.some(s=>['running','waiting','uncertain'].includes(s.runRecovery?.status))||plugins.activities().some(a=>a.count>0&&!['terminal','command'].includes(a.kind)&&!a.id.endsWith('-connection')))fail('ENGINE_BUSY');
+    if(engine?.activeTurns.size||sessionsBusy()||plugins.activities().some(a=>a.count>0&&!['terminal','command'].includes(a.kind)&&!a.id.endsWith('-connection')))fail('ENGINE_BUSY');
     if(!engine?.ready&&state.sessions.some(s=>(s.engineId??'codex')===selectedEngine))fail('ENGINE_DISABLED');
     for(const session of state.sessions.filter(s=>(s.engineId??'codex')===selectedEngine))modelProviders.resolve(session.model??'deepseek-v4.1-flash',id);
     switching=true;broadcastState();

@@ -20,5 +20,12 @@ export const providerPresets=[
   {id:'lmstudio',name:'LM Studio',api:'openai-completions',baseURL:'http://127.0.0.1:1234/v1',auth:'none'},
   {id:'custom',name:'Custom API',api:'openai-completions',baseURL:''},
 ];
-export const protocolForEngine=(provider,engine)=>provider.endpoints?.[engine]??(engine==='codex'&&provider.api!=='openai-responses'||engine==='claude-code'&&provider.api!=='anthropic-messages'?null:{api:provider.api,baseURL:provider.baseURL});
+// 只提供 openai-completions 的供应商，可以通过宿主代理转换后服务其他引擎。
+export const canTranslate=(providerApi,requestedApi)=>providerApi==='openai-completions'&&(requestedApi==='openai-responses'||requestedApi==='anthropic-messages');
+export const protocolForEngine=(provider,engine)=>{
+  const direct=provider.endpoints?.[engine];if(direct)return direct;
+  if(engine==='dsh-native'||(engine==='codex'&&provider.api==='openai-responses')||(engine==='claude-code'&&provider.api==='anthropic-messages'))return {api:provider.api,baseURL:provider.baseURL};
+  const need=engine==='codex'?'openai-responses':engine==='claude-code'?'anthropic-messages':null;
+  return need&&canTranslate(provider.api,need)?{api:need,baseURL:provider.baseURL,translateTo:provider.api}:null;
+};
 export const modelSelection=(provider,id)=>provider==='opencode_go'?id:`@${provider}/${id}`;

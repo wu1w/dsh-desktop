@@ -94,7 +94,15 @@ export class ClientStateStore {
     finally{await handle?.close();}
   }
   async _check(name,expected){const actual=await this._read(name);if(!equal(expected,actual?.signature??null))throw fault('CLIENT_STATE_CHANGED');return actual;}
-  async _syncDirectory(){const handle=await open(this.dataDir,constants.O_RDONLY);try{await handle.sync();}finally{await handle.close();}}
+  async _syncDirectory(){
+    // Windows 不支持对目录 fsync（EPERM）。NTFS 自身有元数据日志，
+    // 这里跳过不会破坏原子写语义；POSIX 上保持原行为。
+    if(process.platform==='win32')return;
+    const handle=await open(this.dataDir,constants.O_RDONLY);
+    try{await handle.sync();}
+    catch(error){if(['EPERM','EINVAL','EBADF','EISDIR'].includes(error.code))return;throw error;}
+    finally{await handle.close();}
+  }
   async _atomic(name,bytes,expected){
     await this._directory();await this._check(name,expected);
     const temporary='.'+name+'.'+randomUUID()+'.tmp';let handle;

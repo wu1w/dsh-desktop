@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import {mkdtemp,mkdir,writeFile,readFile,rm,readdir} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import path from 'node:path';
-import {channelPythonPath,channelEnvironment,CHANNEL_PYTHON_VERSION} from '../shared/channel-runtime.js';
+import {channelPythonPath,channelEnvironment,CHANNEL_PYTHON_VERSION,channelPythonArchitecture} from '../shared/channel-runtime.js';
 import {packagingTarget,windowsInstallerConfig} from '../scripts/packaging-config.mjs';
 import {prepareChannelRuntime} from '../scripts/prepare-channel-runtime.mjs';
 
@@ -35,7 +35,7 @@ test('Python preparation pins interpreter and wheel hashes; failed install prese
   async function execute(command,args){
     calls.push({command,args});
     if(args.includes('python')) {await mkdir(path.join(args[args.indexOf('--install-dir')+1],`cpython-${CHANNEL_PYTHON_VERSION}-fixture`));return {stdout:''};}
-    if(args[0]==='-I')return {stdout:CHANNEL_PYTHON_VERSION+'\n'+process.platform+'\n64\n'};
+    if(args[0]==='-I')return {stdout:CHANNEL_PYTHON_VERSION+'\n'+process.platform+'\n64\n'+process.arch+'\n'};
     if(args.includes('pip'))throw Error('OFFLINE_INSTALL_FAILED');
     throw Error('unexpected command');
   }
@@ -51,7 +51,7 @@ test('successful Python preparation replaces both generated directories without 
   await mkdir(path.join(root,'packages'));await writeFile(path.join(root,'packages','stale'),'old');
   async function execute(command,args){
     if(args.includes('python')){await mkdir(path.join(args[args.indexOf('--install-dir')+1],`cpython-${CHANNEL_PYTHON_VERSION}-fixture`));return {stdout:''};}
-    if(args[0]==='-I')return {stdout:CHANNEL_PYTHON_VERSION+'\n'+process.platform+'\n64\n'};
+    if(args[0]==='-I')return {stdout:CHANNEL_PYTHON_VERSION+'\n'+process.platform+'\n64\n'+process.arch+'\n'};
     if(args.includes('pip')){const target=args[args.indexOf('--target')+1];await mkdir(target);await writeFile(path.join(target,'current'),'new');return {stdout:''};}
     throw Error('unexpected command');
   }
@@ -83,4 +83,36 @@ test('packaged PTY probe emits a real Enter character and escaped source paths',
   const native=nativeEngineProbeSource('/client','/tmp/probe');
   assert(native.includes('engine.createSession(randomUUID()'));assert(native.includes("koffi.load('kernel32.dll')"));
   assert(native.includes('INFERENCE_DISABLED_IN_PACKAGE_PROBE'));assert(native.includes('CREDENTIALS_DISABLED_IN_PACKAGE_PROBE'));
+});
+
+test('Python architecture aliases are explicit; a wrong 64-bit runtime is rejected before replacing files',async t=>{
+  assert.equal(channelPythonArchitecture('AMD64'),'x64');assert.equal(channelPythonArchitecture('x86_64'),'x64');assert.equal(channelPythonArchitecture('aarch64'),'arm64');assert.equal(channelPythonArchitecture('arm64'),'arm64');assert.equal(channelPythonArchitecture('i386'),null);
+  const root=await mkdtemp(path.join(tmpdir(),'dsh-python-wrong-arch-'));t.after(()=>rm(root,{recursive:true,force:true}));await mkdir(path.join(root,'python'));await writeFile(path.join(root,'python','previous'),'keep');let pipCalled=false;
+  async function execute(command,args){
+    if(args.includes('python')){await mkdir(path.join(args[args.indexOf('--install-dir')+1],`cpython-${CHANNEL_PYTHON_VERSION}-fixture`));return {stdout:''};}
+    if(args[0]==='-I')return {stdout:CHANNEL_PYTHON_VERSION+'\n'+process.platform+'\n64\n'+(process.arch==='x64'?'arm64':'x86_64')+'\n'};
+    pipCalled=true;throw Error('unexpected install');
+  }
+  await assert.rejects(prepareChannelRuntime({root,execute}),/CHANNEL_PYTHON_TARGET_MISMATCH/);assert.equal(pipCalled,false);assert.equal(await readFile(path.join(root,'python','previous'),'utf8'),'keep');assert.deepEqual(await readdir(root),['python']);
+});
+
+test('failed runtime rollback preserves the old files in an explicitly reported recovery directory',async t=>{
+  const {installStagedRuntime}=await import('../scripts/prepare-channel-runtime.mjs');const {rename}=await import('node:fs/promises');
+  const root=await mkdtemp(path.join(tmpdir(),'dsh-python-rollback-'));t.after(()=>rm(root,{recursive:true,force:true}));const stage=path.join(root,'.prepare-fixture');await mkdir(stage);
+  for(const name of ['python','packages']){await mkdir(path.join(root,name));await writeFile(path.join(root,name,'old'),'old '+name);await mkdir(path.join(stage,name));await writeFile(path.join(stage,name,'new'),'new '+name);}
+  const denied=()=>Object.assign(Error('locked fixture'),{code:'EPERM'});
+  await assert.rejects(installStagedRuntime(root,stage,{renamePath:async(from,to)=>{
+    if(from===path.join(stage,'packages')||from===path.join(stage,'previous-python'))throw denied();
+    return rename(from,to);
+  }}),error=>error.code==='CHANNEL_PREPARE_ROLLBACK_FAILED'&&error.recoveryDirectory===stage);
+  assert.equal(await readFile(path.join(stage,'previous-python','old'),'utf8'),'old python');assert.equal(await readFile(path.join(root,'packages','old'),'utf8'),'old packages');
+});
+
+test('Windows computer package probe only requests status and does not claim desktop acceptance',async()=>{
+  const {verifyWindowsComputerHelper}=await import('../scripts/verify-packaged.mjs');let call;
+  const commandFor=()=>({file:'trusted-powershell',args:['-NoProfile','-EncodedCommand','fixture']});
+  const run=(...args)=>{call=args;return {status:0,stdout:JSON.stringify({id:'package-status',ok:true,nativeReady:false,nativeValidation:'pending-windows-device',nativeReason:'COMPUTER_INPUT_BLOCKED'})};};
+  const result=verifyWindowsComputerHelper('/staged',{}, {run,commandFor});assert.deepEqual(JSON.parse(call[2].input),{id:'package-status',action:'status'});assert.equal(result.statusProbePassed,true);assert.equal(result.nativeReady,false);assert.equal(result.nativeValidation,'pending-windows-device');
+  assert.throws(()=>verifyWindowsComputerHelper('/staged',{}, {commandFor,run:()=>({status:1,stderr:'private environment detail'})}),/^Error: PACKAGED_WINDOWS_COMPUTER_FAILED$/);
+  assert.throws(()=>verifyWindowsComputerHelper('/staged',{}, {commandFor,run:()=>({status:0,stdout:'not JSON'})}),/PACKAGED_WINDOWS_COMPUTER_PROTOCOL/);
 });

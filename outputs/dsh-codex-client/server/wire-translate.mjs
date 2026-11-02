@@ -138,7 +138,9 @@ function outputFor(text, calls, reason, options = {}) {
   for (const call of calls) {
     if (typeof call.id !== 'string' || !call.id || typeof call.function?.name !== 'string' || !call.function.name || typeof call.function.arguments !== 'string') fault('MODEL_PROTOCOL_INVALID');
     const parsed = parseArguments(call.function.arguments);
-    const custom = options.tools?.some(t => t.type === 'custom' && t.name === call.function.name);
+    // Anthropic custom tools use JSON schemas; only Responses custom tools
+    // encode a raw string in the synthetic {input} argument wrapper.
+    const custom = options.responsesCustomTools && options.tools?.some(t => t.type === 'custom' && t.name === call.function.name);
     const id = call.itemId ?? uid('fc');
     if (custom) {
       if (typeof parsed.input !== 'string' || Object.keys(parsed).some(k => k !== 'input')) fault('MODEL_PROTOCOL_INVALID');
@@ -158,7 +160,7 @@ export function translateJson(requestedApi, json, model, options = {}) {
   const choice = json?.choices?.[0];
   if (!object(choice?.message)) fault('MODEL_PROTOCOL_INVALID');
   const reason = terminal(choice.finish_reason), text = textContent(choice.message.content);
-  const output = outputFor(text, choice.message.tool_calls ?? [], reason, options);
+  const output = outputFor(text, choice.message.tool_calls ?? [], reason, {...options, responsesCustomTools:requestedApi === 'openai-responses'});
   if (requestedApi === 'openai-responses') return responseOf(output, reason, model, json.usage);
   const usage = usageOf(json.usage);
   return {id:uid('msg'), type:'message', role:'assistant', model, content:output.map(item => item.type === 'message'
@@ -255,7 +257,7 @@ export function createStreamTranslator(requestedApi, model, res, options = {}) {
       dispatch();
       if (!done || finishReason == null) fault('MODEL_STREAM_INCOMPLETE');
       const ordered = [...calls.entries()].sort(([a],[b]) => a-b).map(([,call]) => call);
-      const output = outputFor(text, ordered, finishReason, {...options, itemId});
+      const output = outputFor(text, ordered, finishReason, {...options, itemId, responsesCustomTools:requestedApi === 'openai-responses'});
       // Validate every tool first. No partial/invalid tool can escape on failure.
       start();
       if (textStarted) {

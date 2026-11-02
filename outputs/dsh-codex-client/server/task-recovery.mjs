@@ -43,6 +43,7 @@ export class TaskRecovery {
   }
   _cancel(id){this.clearTimer(this.timers.get(id));this.timers.delete(id);this.timerEpoch.set(id,(this.timerEpoch.get(id)??0)+1);}
   _owns(session,engine){return !this.closed&&this.canRun()&&engine===this.getEngine()&&engine?.ready&&(session.engineId??'codex')===this.getSelectedEngine();}
+  _abandoned(session){const run=session.runRecovery;return !!run&&(run.reason==='abandoned'||session.abandonedRuns?.some(record=>record.id===run.id));}
   _new(options={},managed=true){return {version:1,id:randomUUID(),turnId:null,status:'uncertain',reason:'starting',attempt:0,nextRetryAt:null,canResume:false,userStopped:false,managed,permission:['read-only','workspace-write','danger-full-access'].includes(options.sandbox)?options.sandbox:'read-only',effort:['low','high','max'].includes(options.effort)?options.effort:'high',updatedAt:new Date(this.now()).toISOString()};}
   _set(session,patch){session.runRecovery={...session.runRecovery,...patch,updatedAt:new Date(this.now()).toISOString()};}
   async start(session,input,options={},dispatch){
@@ -82,7 +83,7 @@ export class TaskRecovery {
     return this._sequence(session,async()=>{
       if(this.closed||sourceEngine!==this.getEngine())return;
       const old=session.runRecovery;
-      if(old?.reason==='abandoned'||session.abandonedRuns?.some(run=>run.turnId===turn.id))return;
+      if(this._abandoned(session)||session.abandonedRuns?.some(run=>run.turnId===turn.id))return;
       if(note.method==='turn/started'){
         if(old?.turnId===turn.id&&terminal.has(old.status))return;
         if(!old||old.turnId&&old.turnId!==turn.id){session.runRecovery=this._new({sandbox:old?.permission,effort:old?.effort},!session.automationId);}
@@ -119,7 +120,7 @@ export class TaskRecovery {
   }
   async _resume(session,manual,locale){
     const run=session.runRecovery,intent=this.intentEpoch.get(session.id)??0;
-    if(!run||run.reason==='abandoned'||this.closed||(!manual&&this.storageFailed)||session.archived)throw fault('TASK_NOT_RESUMABLE');
+    if(!run||this._abandoned(session)||this.closed||(!manual&&this.storageFailed)||session.archived)throw fault('TASK_NOT_RESUMABLE');
     if(manual&&this.storageFailed){await this._save();this.storageFailed=false;}
     if(!manual&&(run.userStopped||this.stopIntents.has(session.id)||!run.managed||!this.canRun()))return;
     this._cancel(session.id);
@@ -163,7 +164,7 @@ export class TaskRecovery {
     // Synchronous fence wins even when a metadata lookup/start ACK is pending.
     this.stopIntents.add(session.id);this.intentEpoch.set(session.id,(this.intentEpoch.get(session.id)??0)+1);this._cancel(session.id);
     return this._sequence(session,async()=>{
-      if(session.runRecovery){const active=this.getEngine()?.activeTurns.has(session.id),ended=terminal.has(session.runRecovery.status)||session.runRecovery.reason==='network';this._set(session,{userStopped:true,reason,nextRetryAt:null,status:active?'running':ended?'interrupted':'uncertain',canResume:!active});}
+      if(session.runRecovery&&!this._abandoned(session)){const active=this.getEngine()?.activeTurns.has(session.id),ended=terminal.has(session.runRecovery.status)||session.runRecovery.reason==='network';this._set(session,{userStopped:true,reason,nextRetryAt:null,status:active?'running':ended?'interrupted':'uncertain',canResume:!active});}
       let storageError;try{await this._save();}catch(error){storageError=error;}
       const engine=this.getEngine();if(engine?.ready&&engine.activeTurns.has(session.id))await engine.interrupt(session.id);
       if(storageError)throw storageError;return {ok:true};
@@ -202,7 +203,7 @@ export class TaskRecovery {
   async recover(){
     for(const session of this.state.sessions){
       if(this.closed)return;
-      if((session.engineId??'codex')!==this.getSelectedEngine()||session.archived||!pending.has(session.runRecovery?.status))continue;
+      if((session.engineId??'codex')!==this.getSelectedEngine()||session.archived||this._abandoned(session)||!pending.has(session.runRecovery?.status))continue;
       await this._sequence(session,async()=>{
         if(!session.runRecovery.managed){this._set(session,{status:'uncertain',reason:'host_restart',canResume:true,nextRetryAt:null});await this._save();return;}
         if(session.runRecovery.userStopped){this._set(session,{status:'uncertain',reason:'user_stopped',canResume:true,nextRetryAt:null});await this._save();return;}

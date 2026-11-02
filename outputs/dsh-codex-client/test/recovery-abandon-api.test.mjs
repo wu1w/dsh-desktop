@@ -17,14 +17,16 @@ async function fixture(t){
   async createSession(id,options){const row={sessionId:id,threadId:randomUUID(),...options,turns:[]};rows.set(id,row);return row;}
   async resumeSession(id){return rows.get(id);}
   async readSession(id){const row=rows.get(id);return{...row,thread:{id:row.threadId,turns:row.turns}};}
-  async readTurnState(){return{known:false};}
+  async readTurnState(id,turnId){const turn=rows.get(id)?.turns.find(turn=>turn.id===turnId);return turn?{known:true,turnId:turn.id,status:turn.status,terminal:turn.status!=='inProgress'}:{known:false};}
+  async archiveSession(id){rows.get(id).archived=true;}
+  async restoreSession(id){rows.get(id).archived=false;}
   async queueRequest(){return{data:[],nextCursor:null};}
   async startTurn(id,input){
    calls.push({id,input});if(loseAck)throw Object.assign(Error('lost ACK'),{code:'TIMEOUT'});
    const row=rows.get(id),turn={id:randomUUID(),status:'inProgress',items:[{id:randomUUID(),type:'userMessage',content:input}]};row.turns.push(turn);this.activeTurns.set(id,{turnId:turn.id});this.emit('notification',{method:'turn/started',params:{threadId:row.threadId,turn}});return{turn};
   }
   async interrupt(id){this.activeTurns.delete(id);}
-  async dispose(){this.ready=false;this.activeTurns.clear();this.disposed=true;this.emit('exit');}
+  async dispose(){this.ready=false;this.activeTurns.clear();for(const row of rows.values())for(const turn of row.turns)if(turn.status==='inProgress')turn.status='interrupted';this.disposed=true;this.emit('exit');}
  }
  await mkdir(path.join(root,'global'));
  host=await startHost({dataDir,autoStart:false,resolveLegacyKey:async()=> 'fixture-key',instructionOptions:{globalRoot:path.join(root,'global')}});
@@ -51,4 +53,18 @@ test('abandon unknown dispatch disposes its engine, keeps evidence and ignores l
  old.emit('notification',{method:'turn/started',params:{threadId:f.session.threadId,turn:{id:'another-late-turn',status:'inProgress'}}});old.emit('notification',{method:'turn/completed',params:{threadId:f.session.threadId,turn:{id:'another-late-turn',status:'completed'}}});await tick();
  const after=(await f.api('state')).sessions[0];assert.equal(after.runRecovery.id,current.id);assert.equal(after.runRecovery.turnId,current.turnId);assert.equal(after.runRecovery.status,'running');assert.equal(after.abandonedRuns[0].id,oldId);
  assert.equal(f.calls.length,2);assert.equal(f.calls[1].input[0].text,'explicit new task');
+});
+
+test('archive and restore cannot make an explicitly abandoned known turn resumable',async t=>{
+ const f=await fixture(t),route='sessions/'+f.session.id;f.setLoseAck(false);
+ assert.equal((await f.api(route+'/turn',{text:'old task'})).httpStatus,200);await tick();
+ assert.equal((await f.api('engine/disable',{})).httpStatus,200);
+ assert.equal((await f.api('state')).sessions[0].runRecovery.status,'uncertain');
+ assert.equal((await f.api(route+'/abandon',{})).httpStatus,200);
+ assert.equal((await f.api('engine/enable',{})).httpStatus,200);
+ assert.equal((await f.api(route+'/archive',{})).httpStatus,200);
+ assert.equal((await f.api(route+'/restore',{})).httpStatus,200);
+ const after=(await f.api('state')).sessions[0];assert.equal(after.runRecovery.reason,'abandoned');assert.equal(after.runRecovery.canResume,false);
+ assert.equal((await f.api(route+'/resume',{})).code,'TASK_NOT_RESUMABLE');assert.equal(f.calls.length,1);
+ assert.equal((await f.api(route+'/turn',{text:'explicit new task'})).httpStatus,200);assert.equal(f.calls.length,2);
 });

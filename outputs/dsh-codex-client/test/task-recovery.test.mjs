@@ -138,3 +138,24 @@ test('failed abandonment persistence retains the uncertain lock and reports stor
   assert.deepEqual(s.session.runRecovery,old);assert.equal(s.session.abandonedRuns,undefined);assert.equal(s.calls.length,0);
  }finally{await s.close();}
 });
+
+test('stopping or archiving an abandoned run cannot restore permission to resume it',async()=>{
+ for(const reason of ['user_stopped','archived']){
+  const s=setup();try{
+   await s.recovery.start(s.session,'old');s.engine.activeTurns.clear();
+   s.recovery.getEngine=()=>null;await s.recovery.abandon(s.session);
+   const abandoned=structuredClone(s.session.runRecovery);s.recovery.getEngine=()=>s.engine;
+   await s.recovery.stop(s.session,reason);
+   assert.deepEqual(s.session.runRecovery,abandoned);
+   await assert.rejects(s.recovery.resume(s.session),{code:'TASK_NOT_RESUMABLE'});
+   assert.equal(s.calls.length,1);
+  }finally{await s.close();}
+ }
+});
+test('durable abandonment evidence fences a run even if a legacy stop already replaced its reason',async()=>{
+ const s=setup();try{
+  await s.recovery.start(s.session,'old');s.engine.activeTurns.clear();s.recovery.getEngine=()=>null;
+  await s.recovery.abandon(s.session);s.session.runRecovery.reason='archived';s.session.runRecovery.canResume=true;s.recovery.getEngine=()=>s.engine;
+  await assert.rejects(s.recovery.resume(s.session),{code:'TASK_NOT_RESUMABLE'});assert.equal(s.calls.length,1);
+ }finally{await s.close();}
+});

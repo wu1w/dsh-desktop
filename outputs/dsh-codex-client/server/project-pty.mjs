@@ -5,7 +5,7 @@ import { randomUUID } from 'node:crypto';
 import { StringDecoder } from 'node:string_decoder';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import {windowsEnvironment,windowsShell,windowsJobCommand,killWindowsProcessTree} from './windows-process.mjs';
+import {windowsEnvironment,windowsShell,windowsJobCommand,stopWindowsJob} from './windows-process.mjs';
 
 const fault = code => Object.assign(new Error(code), { code });
 const sleep = ms => new Promise(resolve => setTimeout(resolve,ms));
@@ -35,10 +35,10 @@ function guardianDone(diagnostic) {
   return Number.isSafeInteger(guardian)&&guardian>1&&Number.isSafeInteger(session)&&session>1&&guardian!==session;
 }
 export class ProjectPtyManager {
-  constructor({ helperPath=path.resolve(path.dirname(fileURLToPath(import.meta.url)),'../native/bin/dsh-pty-helper'), shell, platform=process.platform, loadPty=()=>import('node-pty'), killTree=killWindowsProcessTree, maxSessions=4, maxProjectSessions=2, maxOutputBytes=1024*1024, maxOutputBytesPerSecond=4*1024*1024, lifetimeMs=24*60*60*1000, env=process.env }={}) {
+  constructor({ helperPath=path.resolve(path.dirname(fileURLToPath(import.meta.url)),'../native/bin/dsh-pty-helper'), shell, platform=process.platform, loadPty=()=>import('node-pty'), stopJob=stopWindowsJob, maxSessions=4, maxProjectSessions=2, maxOutputBytes=1024*1024, maxOutputBytesPerSecond=4*1024*1024, lifetimeMs=24*60*60*1000, env=process.env }={}) {
     shell??=platform==='win32'?windowsShell(env):'/bin/zsh';
     if (platform==='win32'?!path.win32.isAbsolute(shell):!['/bin/zsh','/bin/bash'].includes(shell)) throw fault('PTY_UNSUPPORTED');
-    Object.assign(this,{platform,loadPty,killTree});
+    Object.assign(this,{platform,loadPty,stopJob});
     Object.assign(this,{helperPath,shell,maxSessions,maxProjectSessions,maxOutputBytes,maxOutputBytesPerSecond,lifetimeMs});
     this.env=Object.fromEntries(['HOME','USER','LOGNAME','LANG','LC_ALL','LC_CTYPE','TMPDIR'].filter(key=>typeof env[key]==='string').map(key=>[key,env[key]]));
     const terminalPath=typeof env.PATH==='string'&&env.PATH.length>0&&env.PATH.length<=32768&&!env.PATH.includes('\0')?env.PATH:'/usr/bin:/bin:/usr/sbin:/sbin:/opt/homebrew/bin:/usr/local/bin';
@@ -104,7 +104,7 @@ export class ProjectPtyManager {
     const args=path.win32.basename(this.shell).toLowerCase()==='cmd.exe'?['/d']:['-NoLogo','-NoProfile'];
     const launch=windowsJobCommand(this.shell,args,{env:this.env});
     let pty;try{pty=spawnPty(launch.file,launch.args,{cwd,env:this.env,name:'xterm-256color',cols,rows,useConpty:true,useConptyDll:false});}catch{throw fault('PTY_START_FAILED');}
-    const session={id:randomUUID(),projectId,cols,rows,status:'running',exitCode:null,signal:null,pty,child:pty,output:Buffer.alloc(0),start:0,end:0,rateStart:Date.now(),outputRate:0,inputRate:0,inputRateStart:Date.now(),operationStart:Date.now(),operations:0,queuedBytes:0,stopping:null,cleanupPending:false,timer:null};
+    const session={id:randomUUID(),projectId,cols,rows,status:'running',exitCode:null,signal:null,pty,stopEvent:launch.stopEvent,child:pty,output:Buffer.alloc(0),start:0,end:0,rateStart:Date.now(),outputRate:0,inputRate:0,inputRateStart:Date.now(),operationStart:Date.now(),operations:0,queuedBytes:0,stopping:null,cleanupPending:false,timer:null};
     this.sessions.set(session.id,session);
     session.done=new Promise(resolve=>{session.resolveDone=resolve;});
     session.dataSubscription=pty.onData(text=>{
@@ -135,10 +135,10 @@ export class ProjectPtyManager {
     const stopping=(async()=>{
       try{
         if(session.status!=='exited'){
-          // Kill the tree while its root still exists, then release ConPTY.
-          if(!await waitUntil(()=>session.pty.pid>0||session.status==='exited',5000))throw fault('PTY_STOP_FAILED');
-          if(session.status!=='exited'){try{await this.killTree(session.pty.pid,{env:this.env});}catch(error){if(session.status!=='exited')throw error;}}
-          if(session.status!=='exited')session.pty.kill();
+          // Closing the supervisor's Job kills only its owned descendants.
+          // Do not call taskkill or node-pty.kill(): both can enumerate numeric
+          // PIDs asynchronously after the original process has already exited.
+          try{await this.stopJob(session.stopEvent,{env:this.env});}catch(error){if(session.status!=='exited')throw error;}
         }
         if(!await waitUntil(()=>session.status==='exited',2500))throw fault('PTY_STOP_FAILED');
         session.cleanupPending=false;session.stopError=null;
@@ -184,7 +184,7 @@ export class ProjectPtyManager {
     if(Date.now()-session.inputRateStart>=1000){session.inputRateStart=Date.now();session.inputRate=0;}
     if(session.inputRate+bytes.length>65536||session.queuedBytes+bytes.length>65536)throw fault('PTY_INPUT_LIMIT');
     session.inputRate+=bytes.length;session.queuedBytes+=bytes.length;
-    try {if(session.pty)session.pty.write(data);else await new Promise((resolve,reject)=>{session.child.stdin.write(frame(1,bytes),error=>error?reject(fault('PTY_NOT_RUNNING')):resolve());});}
+    try {if(session.pty){try{session.pty.write(data);}catch{throw fault('PTY_NOT_RUNNING');}}else await new Promise((resolve,reject)=>{session.child.stdin.write(frame(1,bytes),error=>error?reject(fault('PTY_NOT_RUNNING')):resolve());});}
     finally {session.queuedBytes-=bytes.length;}
     return {accepted:true};
   }
@@ -194,7 +194,7 @@ export class ProjectPtyManager {
     if(session.status!=='running'||session.stopping)throw fault('PTY_NOT_RUNNING');
     this._allowOperation(session);
     const bytes=Buffer.alloc(8);bytes.writeUInt32BE(cols,0);bytes.writeUInt32BE(rows,4);
-    if(session.pty)session.pty.resize(cols,rows);else await new Promise((resolve,reject)=>session.child.stdin.write(frame(2,bytes),error=>error?reject(fault('PTY_NOT_RUNNING')):resolve()));
+    if(session.pty){try{session.pty.resize(cols,rows);}catch{throw fault('PTY_NOT_RUNNING');}}else await new Promise((resolve,reject)=>session.child.stdin.write(frame(2,bytes),error=>error?reject(fault('PTY_NOT_RUNNING')):resolve()));
     session.cols=cols;session.rows=rows;return {cols,rows};
   }
   async _stop(session) {

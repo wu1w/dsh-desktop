@@ -104,3 +104,26 @@ test('translated count_tokens is rejected locally, while direct unauthenticated 
  const direct=await proxy(store,{provider:'local',model:'local-model',api:'anthropic-messages',action:'messages/count_tokens',body:{messages:[{role:'user',content:'count only'}]}});
  assert.equal(direct.status,200);assert.equal(JSON.parse(direct.body).input_tokens,12);assert.equal(requests.length,1);assert.equal(requests[0].url,'http://127.0.0.1:11434/v1/messages/count_tokens');assert.equal(requests[0].options.headers['x-api-key'],undefined);
 });
+
+test('migration preserves historical ID/name bounds and the full existing 10000-model budget across reload',async t=>{
+ const longId='historic-'+ 'x'.repeat(247),longName='历史'.repeat(512);
+ const legacyModels=Array.from({length:10000},(_,i)=>({id:i===0?longId:`historical-${i}`,name:i===0?longName:`Historical ${i}`}));
+ const store=await fixture(t,{legacyModels});
+ assert.equal(store.models().length,10000);assert.equal(store.resolve(longId,'codex').name,longName);
+ assert.equal(store.resolve('historical-9999','codex').model,'historical-9999');
+ await setKey(store,'opencode_go','fixture-go-key');
+ const saved=await readFile(store.file);assert(saved.length<8*1024*1024);
+ const next=await new ModelProviders({dataDir:path.dirname(store.file)}).load();
+ assert.equal(next.models().length,10000);assert.equal(next.resolve(longId,'codex').name,longName);
+ assert.equal(next.resolve('historical-9999','codex').model,'historical-9999');
+ // Wider compatibility applies only to the historical provider, not new inputs.
+ await assert.rejects(next.mutate({id:'custom',name:'Custom',api:'openai-completions',baseURL:'https://example.invalid',auth:'none',models:[{id:longId}],revision:next.state.revision}),{code:'MODEL_CONFIG_INVALID'});
+});
+
+test('oversized provider saves cannot replace a readable catalog with an unreadable file',async t=>{
+ const store=await fixture(t);await setKey(store,'opencode_go','fixture-go-key');
+ const before=await readFile(store.file,'utf8'),revision=store.state.revision;
+ const provider=store.public().providers.find(p=>p.id==='opencode_go');
+ await assert.rejects(store.mutate({...provider,models:Array.from({length:9000},(_,i)=>({id:`large-${i}`,name:'x'.repeat(1024)})),revision}),{code:'MODEL_STORAGE_INVALID'});
+ assert.equal(await readFile(store.file,'utf8'),before);assert.equal(store.state.revision,revision);
+});

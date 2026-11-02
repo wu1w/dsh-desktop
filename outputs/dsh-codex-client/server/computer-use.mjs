@@ -2,7 +2,10 @@ import {randomUUID} from 'node:crypto';
 import {computerTool} from '../shared/computer-tool.js';
 export const computerErrors={
  COMPUTER_UNAVAILABLE:['电脑操作仅在本机 DSH 桌面应用中可用。','Computer Use is available in the local DSH desktop app.'],
- COMPUTER_NATIVE_UNSUPPORTED:['此系统尚未提供本机应用控制。Windows 可使用 DSH 浏览器；本机应用控制仍待实现和实机验收。','Native desktop control is not implemented on this platform. Use the DSH browser on Windows; native app control still requires implementation and device validation.'],
+ COMPUTER_NATIVE_BLOCKED:['系统策略阻止了 Windows 控制组件。DSH 浏览器仍可使用；请联系管理员检查应用策略，不要降低安全设置。','System policy blocked the Windows controller. The DSH browser remains available. Ask your administrator to review app policy; do not weaken security settings.'],
+ COMPUTER_DESKTOP_UNAVAILABLE:['本机控制需要已登录用户的普通交互桌面。请返回桌面并关闭 UAC 或锁屏后重新检查。','Native control requires a signed-in user on the ordinary interactive desktop. Return to that desktop after UAC or the lock screen, then check again.'],
+ COMPUTER_INPUT_BLOCKED:['系统阻止了本机操作，可能是目标权限更高或输入未送达。请观察确认，不要重复上次操作。','Windows blocked the action, possibly because the target is elevated or input was not delivered. Observe and verify before another action.'],
+ COMPUTER_NATIVE_UNSUPPORTED:['当前平台不支持此本机控制操作，DSH 浏览器仍可使用。','This native-control operation is unsupported on the current platform. The DSH browser remains available.'],
  COMPUTER_NOT_CONNECTED:['请先在加号菜单的“使用电脑”中连接一个目标。','Connect a target from Use computer in the plus menu first.'],
  COMPUTER_STOPPED:['电脑控制已停止，请由用户重新连接。','Computer control stopped. The user must reconnect it.'],
  COMPUTER_ACCESSIBILITY_REQUIRED:['请在系统设置中允许 DSH 的辅助功能访问，然后重新检查。','Allow DSH Accessibility access in System Settings, then check again.'],
@@ -34,7 +37,7 @@ export class ComputerUse {
  async connect(id,target){
   if(this.closed||!this.runtime)throw fault('COMPUTER_UNAVAILABLE');const session=this.state.sessions.find(s=>s.id===id);if(!session||session.archived||session.channel||session.kind==='agent')throw fault('COMPUTER_NOT_CONNECTED');
   let binding={kind:'browser',name:'browser'};
-  if(target?.kind==='app'){const status=await this.status();if(status.nativeAvailable===false)throw fault(status.nativeReason==='COMPUTER_NATIVE_UNSUPPORTED'?'COMPUTER_NATIVE_UNSUPPORTED':'COMPUTER_NATIVE_UNAVAILABLE');const {apps}=await this.apps();const app=apps.find(row=>row.pid===target.pid);if(!app)throw fault('COMPUTER_APP_GONE');if(!status.accessibility)throw fault('COMPUTER_ACCESSIBILITY_REQUIRED');if([...this.sessions].some(([other,entry])=>other!==id&&entry.target.kind==='app'&&entry.target.pid===app.pid))throw fault('COMPUTER_BUSY');binding={kind:'app',pid:app.pid,name:app.name,bundleId:app.bundleId};}
+  if(target?.kind==='app'){const status=await this.status();if(status.nativeAvailable===false)throw fault(['COMPUTER_NATIVE_UNSUPPORTED','COMPUTER_NATIVE_BLOCKED','COMPUTER_DESKTOP_UNAVAILABLE'].includes(status.nativeReason)?status.nativeReason:'COMPUTER_NATIVE_UNAVAILABLE');const {apps}=await this.apps();const app=apps.find(row=>row.pid===target.pid&&(!row.windowId||row.windowId===target.windowId&&row.processStartTime===target.processStartTime));if(!app)throw fault('COMPUTER_APP_GONE');if(!status.accessibility)throw fault('COMPUTER_ACCESSIBILITY_REQUIRED');if([...this.sessions].some(([other,entry])=>other!==id&&entry.target.kind==='app'&&entry.target.pid===app.pid))throw fault('COMPUTER_BUSY');binding={kind:'app',pid:app.pid,name:app.name,bundleId:app.bundleId,...(app.windowId?{windowId:app.windowId,processStartTime:app.processStartTime}:{})};}
   else if(target?.kind!=='browser')throw fault('COMPUTER_INVALID_INPUT');
   else {const status=await this.status();if(status.available===false||status.browserAvailable===false)throw fault('COMPUTER_UNAVAILABLE');}
   if(this.closed)throw fault('COMPUTER_STOPPED');this.stop(id);const entry={target:binding,abort:new AbortController(),step:0,busy:false,last:null,observation:null,nativeObservation:null};this.sessions.set(id,entry);this.changed(id);

@@ -7,8 +7,8 @@ import {fileURLToPath} from 'node:url';
 import vm from 'node:vm';
 import {ComputerUse} from '../server/computer-use.mjs';
 
-async function fixture(platform){
- const windows=[],partitions=[],nativeCalls=[],external=[];
+async function fixture(platform,nativeStatus){
+ const windows=[],partitions=[],nativeCalls=[],nativeRequests=[],children=[],external=[];
  class Window extends EventEmitter {
   constructor(options){super();this.options=options;this.destroyed=false;this.urls=[];this.webContents=new EventEmitter();Object.assign(this.webContents,{
    setWindowOpenHandler:fn=>this.openHandler=fn,isLoadingMainFrame:()=>false,
@@ -20,16 +20,16 @@ async function fixture(platform){
   destroy(){this.destroyed=true;this.emit('closed');}
  }
  const electron={BrowserWindow:Window,session:{fromPartition(name){const partition=new EventEmitter();Object.assign(partition,{name,setPermissionRequestHandler:fn=>partition.permission=fn,setPermissionCheckHandler:fn=>partition.check=fn,clearStorageData:async()=>{partition.cleared=true;}});partitions.push(partition);return partition;}},shell:{openExternal:async url=>external.push(url)}};
- const module={exports:{}},require=createRequire(import.meta.url);
- const fakeSpawn=(...args)=>{nativeCalls.push(args);const child=new EventEmitter();child.stdout=new EventEmitter();child.stdout.setEncoding=()=>{};child.stderr=new EventEmitter();child.stdin=new EventEmitter();child.stdin.write=()=>{};child.kill=()=>child.emit('exit');queueMicrotask(()=>child.emit('error',Object.assign(Error('missing helper'),{code:'ENOENT'})));return child;};
+ const module={exports:{}},require=createRequire(new URL('../desktop/computer-runtime.cjs',import.meta.url));
+ const fakeSpawn=(...args)=>{nativeCalls.push(args);const child=new EventEmitter();children.push(child);child.stdout=new EventEmitter();child.stdout.setEncoding=()=>{};child.stderr=new EventEmitter();child.stdin=new EventEmitter();child.stdin.write=line=>{if(nativeStatus){const request=JSON.parse(line);nativeRequests.push(request);const reply=typeof nativeStatus==='function'?nativeStatus(request):nativeStatus;if(reply)queueMicrotask(()=>child.stdout.emit('data',JSON.stringify({id:request.id,ok:true,...reply})+'\n'));}};child.kill=()=>child.emit('exit');if(!nativeStatus)queueMicrotask(()=>child.emit('error',Object.assign(Error('missing helper'),{code:'ENOENT'})));return child;};
  const source=await readFile(new URL('../desktop/computer-runtime.cjs',import.meta.url),'utf8');
  vm.runInNewContext(source,{require:id=>id==='electron'?electron:id==='node:child_process'?{spawn:fakeSpawn}:require(id),module,__dirname:fileURLToPath(new URL('../desktop/',import.meta.url)),process,setTimeout,clearTimeout,URL,console});
- const runtime=module.exports.createComputerRuntime({platform,app:{},locale:()=> 'en'});
- return {runtime,windows,partitions,nativeCalls,external};
+ const runtime=module.exports.createComputerRuntime({platform,app:{},locale:()=> 'en',environment:{SystemRoot:'C:\\Windows'}});
+ return {runtime,windows,partitions,nativeCalls,nativeRequests,children,external};
 }
 
-test('Windows exposes the browser without spawning a native helper or opening system settings',async()=>{
- const f=await fixture('win32');try{
+test('unsupported platforms expose the browser without spawning a native helper or opening system settings',async()=>{
+ const f=await fixture('linux');try{
  const status=await f.runtime.status();assert.equal(status.available,true);assert.equal(status.browserAvailable,true);assert.equal(status.nativeAvailable,false);assert.equal(status.nativeReason,'COMPUTER_NATIVE_UNSUPPORTED');
  await assert.rejects(f.runtime.apps(),{code:'COMPUTER_NATIVE_UNSUPPORTED'});
  await assert.rejects(f.runtime.permission('screen'),{code:'COMPUTER_NATIVE_UNSUPPORTED'});
@@ -69,4 +69,33 @@ test('host enforces per-target capabilities even if a caller bypasses the UI',as
  runtime.status=async()=>({available:true,browserAvailable:false});await assert.rejects(service.connect('one',{kind:'browser'}),{code:'COMPUTER_UNAVAILABLE'});
  assert.equal(calls.length,1);
  }finally{service.close();}
+});
+
+test('Windows native status distinguishes an active desktop from blocked service or locked sessions',async()=>{
+ for(const ready of [true,false]){
+  const f=await fixture('win32',{nativeReady:ready,accessibility:ready,nativeReason:ready?null:'COMPUTER_DESKTOP_UNAVAILABLE',nativeValidation:'pending-windows-device'});
+  try{const status=await f.runtime.status();assert.equal(status.browserAvailable,true);assert.equal(status.nativeAvailable,ready);assert.equal(status.nativeValidation,'pending-windows-device');assert.equal(f.nativeCalls.length,1);assert.equal(f.nativeCalls[0][0],'C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe');assert.equal(f.nativeCalls[0][2].windowsHide,true);assert.deepEqual(Object.keys(f.nativeCalls[0][2].env),['SystemRoot']);if(!ready)assert.equal(status.nativeReason,'COMPUTER_DESKTOP_UNAVAILABLE');}finally{f.runtime.close();}
+ }
+});
+
+test('native IPC ignores bytes from an exited helper after a new helper starts',async()=>{
+ const f=await fixture('win32',()=>undefined);
+ try{
+  const first=f.runtime.status();f.children[0].emit('error',Error('gone'));assert.equal((await first).nativeAvailable,false);
+  const second=f.runtime.status();f.children[0].stdout.emit('data','not-json-from-old-helper');
+  f.children[1].stdout.emit('data',JSON.stringify({id:f.nativeRequests[1].id,ok:true,nativeReady:true})+'\n');
+  assert.equal((await second).nativeAvailable,true);
+ }finally{f.runtime.close();}
+});
+
+test('native IPC preserves bound window identity and never accepts caller replacement fields',async()=>{
+ const f=await fixture('win32',{nativeObservation:'new',windowId:'42',bounds:{x:-1920,y:0,width:1000,height:600}});
+ try{await f.runtime.execute('one',{kind:'app',pid:123,windowId:'42',processStartTime:'638000000000000000'},{action:'observe',pid:999,windowId:'99',processStartTime:'1'});assert.equal(f.nativeRequests[0].pid,123);assert.equal(f.nativeRequests[0].windowId,'42');assert.equal(f.nativeRequests[0].processStartTime,'638000000000000000');}finally{f.runtime.close();}
+});
+
+test('app connection refuses recycled windows and preserves the verified process start identity',async()=>{
+ const app={pid:42,name:'Fixture',windowId:'201',processStartTime:'638000000000000000'};const calls=[];
+ const runtime={status:async()=>({available:true,nativeAvailable:true,accessibility:true}),apps:async()=>({apps:[app]}),execute:async(...args)=>{calls.push(args);return {nativeObservation:'fixture'};},stop(){},close(){}};
+ const service=new ComputerUse({runtime,state:{sessions:[{id:'one'}]},getEngine:()=>({activeTurns:new Map()})});
+ try{await assert.rejects(service.connect('one',{kind:'app',pid:42,windowId:'200',processStartTime:app.processStartTime}),{code:'COMPUTER_APP_GONE'});await assert.rejects(service.connect('one',{kind:'app',...app,processStartTime:'1'}),{code:'COMPUTER_APP_GONE'});await service.connect('one',{kind:'app',...app});assert.equal(calls[0][1].windowId,app.windowId);assert.equal(calls[0][1].processStartTime,app.processStartTime);}finally{service.close();}
 });

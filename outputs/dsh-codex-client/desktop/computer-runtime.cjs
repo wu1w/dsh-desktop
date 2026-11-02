@@ -2,6 +2,7 @@ const {BrowserWindow,session,desktopCapturer,systemPreferences,shell}=require('e
 const {spawn}=require('node:child_process');
 const {randomUUID}=require('node:crypto');
 const path=require('node:path');
+const {windowsHelperCommand,validateWindowsInput,screenshotGeometry}=require('./windows-computer.cjs');
 const fail=code=>{throw Object.assign(new Error(code),{code});};
 const browserDocument=()=>{
  const state=window.__dshComputer={token:String(Date.now())+Math.random().toString(36),nodes:[],signatures:[]};
@@ -22,19 +23,24 @@ const browserAction=(input)=>{
  else if(input.action==='scroll'){state.token='';window.scrollBy({left:input.direction==='right'?600:input.direction==='left'?-600:0,top:input.direction==='up'?-600:input.direction==='down'?600:0,behavior:'instant'});}
  else if(input.action==='key'){if(node)node.focus();state.token='';}
 };
-function createComputerRuntime({app,locale=()=> 'zh-CN',platform=process.platform}){
+function createComputerRuntime({app,locale=()=> 'zh-CN',platform=process.platform,environment=process.env}){
  let child=null,pending=new Map(),buffer='',closed=false,disconnected=()=>{};const browsers=new Map();
  function native(input,signal){return new Promise((resolve,reject)=>{
   if(closed)return reject(Object.assign(Error('COMPUTER_STOPPED'),{code:'COMPUTER_STOPPED'}));
-  if(platform!=='darwin')return reject(Object.assign(Error('COMPUTER_NATIVE_UNSUPPORTED'),{code:'COMPUTER_NATIVE_UNSUPPORTED'}));
-  if(!child){child=spawn(path.join(__dirname,'../native/bin/dsh-computer-helper'),[],{stdio:['pipe','pipe','pipe']});const bound=child;
-   child.stdout.setEncoding('utf8');child.stdout.on('data',chunk=>{buffer+=chunk;if(buffer.length>4000000){bound.kill();return;}let end;while((end=buffer.indexOf('\n'))>=0){const line=buffer.slice(0,end);buffer=buffer.slice(end+1);try{const value=JSON.parse(line);const task=pending.get(value.id);if(task){task.finish();value.ok?task.resolve(value):task.reject(Object.assign(Error(value.code),{code:value.code}));}}catch{}}});
-   const exit=()=>{if(child!==bound)return;child=null;buffer='';for(const task of [...pending.values()]){task.finish();task.reject(Object.assign(Error('COMPUTER_NATIVE_UNAVAILABLE'),{code:'COMPUTER_NATIVE_UNAVAILABLE',actionSent:true}));}};
-   child.on('exit',exit);child.on('error',exit);child.stdin.on('error',()=>{});child.stderr.on('data',()=>{});
+  if(!['darwin','win32'].includes(platform))return reject(Object.assign(Error('COMPUTER_NATIVE_UNSUPPORTED'),{code:'COMPUTER_NATIVE_UNSUPPORTED'}));
+  if(platform==='win32')input=validateWindowsInput(input);
+  if(!child){
+   const command=platform==='win32'?windowsHelperCommand(path.join(__dirname,'..'),environment):{file:path.join(__dirname,'../native/bin/dsh-computer-helper'),args:[]};
+   const env=platform==='win32'?Object.fromEntries(['SystemRoot','WINDIR','TEMP','TMP','USERPROFILE','LOCALAPPDATA','APPDATA'].filter(k=>environment[k]).map(k=>[k,environment[k]])):undefined;
+   child=spawn(command.file,command.args,{stdio:['pipe','pipe','pipe'],windowsHide:true,...(env?{env}:{})});const bound=child;let startupFailure='COMPUTER_NATIVE_UNAVAILABLE';
+   child.stdout.setEncoding('utf8');child.stdout.on('data',chunk=>{if(child!==bound)return;buffer+=chunk;if(buffer.length>4000000){bound.kill();return;}let end;while((end=buffer.indexOf('\n'))>=0){const line=buffer.slice(0,end);buffer=buffer.slice(end+1);try{const value=JSON.parse(line);const task=pending.get(value.id);if(task){task.finish();value.ok?task.resolve(value):task.reject(Object.assign(Error(value.code),{code:value.code}));}}catch{}}});
+   const exit=()=>{if(child!==bound)return;child=null;buffer='';for(const task of [...pending.values()]){task.finish();task.reject(Object.assign(Error('COMPUTER_NATIVE_UNAVAILABLE'),{code:startupFailure,actionSent:true}));}};
+   child.on('exit',exit);child.on('error',exit);child.stdin.on('error',()=>{});child.stderr.on('data',chunk=>{if(String(chunk).includes('COMPUTER_NATIVE_BLOCKED'))startupFailure='COMPUTER_NATIVE_BLOCKED';});
+   bound.failPending=()=>exit();
   }
-  const id=randomUUID();const abort=()=>{child?.kill();};const timer=setTimeout(abort,12000);
+  const id=randomUUID();const abort=()=>{const current=child;current?.failPending?.();current?.kill();};const timer=setTimeout(abort,12000);
   const finish=()=>{clearTimeout(timer);signal?.removeEventListener('abort',abort);pending.delete(id);};
-  pending.set(id,{resolve,reject,finish});signal?.addEventListener('abort',abort,{once:true});if(signal?.aborted){abort();return;}child.stdin.write(JSON.stringify({...input,id})+'\n');
+  pending.set(id,{resolve,reject,finish});signal?.addEventListener('abort',abort,{once:true});if(signal?.aborted){abort();return;}try{child.stdin.write(JSON.stringify({...input,id})+'\n');}catch{abort();}
  });}
  function safeURL(value){let url;try{url=new URL(value);}catch{fail('COMPUTER_INVALID_URL');}if(!['http:','https:'].includes(url.protocol)||url.username||url.password)fail('COMPUTER_INVALID_URL');return url.href;}
  async function browser(id){let win=browsers.get(id);if(win&&!win.isDestroyed())return win;
@@ -53,9 +59,9 @@ function createComputerRuntime({app,locale=()=> 'zh-CN',platform=process.platfor
    if(closed)return {available:false,browserAvailable:false,nativeAvailable:false};
    // The isolated Electron browser does not need a native controller or OS permissions.
    const capabilities={available:true,browserAvailable:true,nativeAvailable:false,platform};
-   if(platform!=='darwin')return {...capabilities,nativeReason:'COMPUTER_NATIVE_UNSUPPORTED'};
-   try{return {...await native({action:'status'}),...capabilities,nativeAvailable:true};}
-   catch{return {...capabilities,nativeReason:'COMPUTER_NATIVE_UNAVAILABLE'};}
+   if(!['darwin','win32'].includes(platform))return {...capabilities,nativeReason:'COMPUTER_NATIVE_UNSUPPORTED'};
+   try{const nativeStatus=await native({action:'status'});return {...nativeStatus,...capabilities,nativeAvailable:platform==='win32'?nativeStatus.nativeReady===true:true,...(platform==='win32'?{nativeValidation:'pending-windows-device'}:{})};}
+   catch(error){return {...capabilities,nativeReason:['COMPUTER_NATIVE_BLOCKED','COMPUTER_DESKTOP_UNAVAILABLE'].includes(error.code)?error.code:'COMPUTER_NATIVE_UNAVAILABLE',...(platform==='win32'?{nativeValidation:'pending-windows-device'}:{})};}
   },
   async apps(){return native({action:'apps'});},
   async permission(kind){if(platform!=='darwin')fail('COMPUTER_NATIVE_UNSUPPORTED');if(kind==='accessibility')return native({action:'requestAccessibility'});if(kind==='screen'){await shell.openExternal('x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture');return {ok:true};}fail('COMPUTER_INVALID_INPUT');},
@@ -76,15 +82,15 @@ function createComputerRuntime({app,locale=()=> 'zh-CN',platform=process.platfor
      if(signal?.aborted)fail('COMPUTER_STOPPED');for(let attempt=0;;attempt++){try{return await observeBrowser(win);}catch(error){if(attempt>=2||signal?.aborted||win.isDestroyed())throw error;await new Promise(resolve=>setTimeout(resolve,80*(attempt+1)));}}
     }finally{signal?.removeEventListener('abort',abort);}
    }
-   const result=await native({...input,pid:target.pid},signal);
+   const result=await native({...input,pid:target.pid,...(platform==='win32'?{windowId:target.windowId,processStartTime:target.processStartTime}:{})},signal);
    // Capture only the selected application's observed window; never fall back to another screen.
-   if(systemPreferences.getMediaAccessStatus('screen')==='granted'){
-    try{const sources=await desktopCapturer.getSources({types:['window'],thumbnailSize:{width:1100,height:800},fetchWindowIcons:false});const matches=result.windowId?sources.filter(source=>source.id.split(':')[1]===String(result.windowId)):[];if(matches.length===1)result.image=matches[0].thumbnail.toDataURL();}catch{}
+   if(platform==='win32'||systemPreferences.getMediaAccessStatus('screen')==='granted'){
+    try{const sources=await desktopCapturer.getSources({types:['window'],thumbnailSize:{width:1100,height:800},fetchWindowIcons:false});const matches=result.windowId?sources.filter(source=>source.id.split(':')[1]===String(result.windowId)):[];if(matches.length===1){result.image=matches[0].thumbnail.toDataURL();if(platform==='win32')result.screenshot=screenshotGeometry(result,matches[0].thumbnail.getSize());}}catch{}
    }
    return result;
   },
   stop(id){const win=browsers.get(id);browsers.delete(id);if(win&&!win.isDestroyed())win.destroy();},
-  close(){closed=true;child?.kill();for(const id of browsers.keys())this.stop(id);}
+  close(){closed=true;const current=child;current?.failPending?.();current?.kill();for(const id of browsers.keys())this.stop(id);}
  };
 }
 module.exports={createComputerRuntime};

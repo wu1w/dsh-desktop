@@ -1,5 +1,5 @@
 import { spawn } from 'node:child_process';
-import {windowsEnvironment,windowsShell,windowsCommandArgs,windowsJobCommand,killWindowsProcessTree} from './windows-process.mjs';
+import {windowsEnvironment,windowsShell,windowsCommandArgs,windowsJobCommand,stopWindowsJob} from './windows-process.mjs';
 
 const executions = new WeakMap();
 const delay = milliseconds => new Promise(resolve => setTimeout(resolve, milliseconds));
@@ -31,7 +31,7 @@ export function stopProjectCommand(child) {
       // The leader may have exited while background descendants redirected their
       // pipes. Its close event alone does not mean that the process group is gone.
       if(execution.platform==='win32'){
-        if(!execution.doneSettled){try{await execution.killTree(child.pid,{env:execution.environment});}catch(error){if(!execution.doneSettled)throw error;}}
+        if(!execution.doneSettled){try{await execution.stopJob(execution.stopEvent,{env:execution.environment});}catch(error){if(!execution.doneSettled)throw error;}}
       }else if (groupExists(child)) {
         signalGroup(child, 'SIGTERM');
         if (!await waitUntil(() => !groupExists(child), execution.killGraceMs)) {
@@ -61,7 +61,7 @@ export async function stopProjectCommands(commands) {
   const failure = stopped.find(result => result.status === 'rejected');
   if (failure) throw failure.reason;
 }
-export async function runProjectCommand({ command, cwd, commands, shell, platform=process.platform, env=process.env, spawnProcess=spawn, killTree=killWindowsProcessTree, timeoutMs = 30000, killGraceMs = 1000, maxOutputBytes = 1024 * 1024 }) {
+export async function runProjectCommand({ command, cwd, commands, shell, platform=process.platform, env=process.env, spawnProcess=spawn, stopJob=stopWindowsJob, timeoutMs = 30000, killGraceMs = 1000, maxOutputBytes = 1024 * 1024 }) {
   shell??=platform==='win32'?windowsShell(env):env.SHELL||'/bin/zsh';
   const environment = platform==='win32'?windowsEnvironment(env):Object.fromEntries(['PATH', 'HOME', 'USER', 'LANG', 'TMPDIR', 'SHELL', 'TERM'].filter(key => env[key]).map(key => [key, env[key]]));
   const launch=platform==='win32'?windowsJobCommand(shell,windowsCommandArgs(shell,command),{env:environment}):{file:shell,args:['-c',command]};
@@ -80,7 +80,7 @@ export async function runProjectCommand({ command, cwd, commands, shell, platfor
   });
   let rejectStop;
   const stopFailed = new Promise((resolve, reject) => { rejectStop = reject; });
-  const execution = { done, killGraceMs, commands, doneSettled: false, rejectStop,platform,environment,killTree };
+  const execution = { done, killGraceMs, commands, doneSettled: false, rejectStop,platform,environment,stopJob,stopEvent:launch.stopEvent };
   void done.then(() => { execution.doneSettled = true; }, () => { execution.doneSettled = true; });
   executions.set(child, execution); commands.add(child);
   const timeout = setTimeout(() => { void stopProjectCommand(child).catch(() => {}); }, timeoutMs);

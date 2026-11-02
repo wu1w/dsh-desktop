@@ -157,3 +157,16 @@ test('cancellation or closed downstream prevents any late completion or tool rel
     assert.throws(()=>stopped.push(frame(chunk({content:'late'}))),{code:'MODEL_REQUEST_CANCELLED'});
   }
 });
+
+test('Anthropic explicitly typed custom tools retain their JSON schema arguments in both response modes',()=>{
+  const tools=[{type:'custom',name:'read_file',input_schema:{type:'object',properties:{path:{type:'string'}},required:['path']}}];
+  const request=translateRequest('anthropic-messages',{model:'fixture',messages:[{role:'user',content:'Read the file'}],tools});
+  assert.deepEqual(request.tools[0].function.parameters,tools[0].input_schema);
+  const call={id:'call_1',function:{name:'read_file',arguments:'{"path":"fixture.txt"}'}};
+  const json=translateJson('anthropic-messages',{choices:[{message:{tool_calls:[call]},finish_reason:'tool_calls'}]},'fixture',{tools});
+  assert.deepEqual(json.content,[{type:'tool_use',id:'call_1',name:'read_file',input:{path:'fixture.txt'}}]);
+  const f=fixture('anthropic-messages',{tools}),events=send(f,[frame(chunk({tool_calls:[{index:0,...call}]})),frame(chunk({},'tool_calls')),'data: [DONE]\n\n']);
+  const delta=events.find(event=>event.type==='content_block_delta');
+  assert.equal(delta.delta.partial_json,call.function.arguments);
+  assert.equal(events.at(-1).type,'message_stop');
+});

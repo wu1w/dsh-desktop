@@ -3,11 +3,24 @@ import {readFile,stat,access,mkdtemp,rm} from 'node:fs/promises';
 import {constants} from 'node:fs';
 import {createHash} from 'node:crypto';
 import {spawnSync} from 'node:child_process';
+import {createRequire} from 'node:module';
 import {pathToFileURL,fileURLToPath} from 'node:url';
-import {channelPythonPath,channelEnvironment,CHANNEL_PYTHON_VERSION} from '../shared/channel-runtime.js';
+import {channelPythonPath,channelEnvironment,CHANNEL_PYTHON_VERSION,channelPythonArchitecture} from '../shared/channel-runtime.js';
 import path from 'node:path';
 import vm from 'node:vm';
 import {nativeEngineProbeSource,windowsPtyProbeSource} from './packaged-probes.mjs';
+
+// Compile and query capabilities only. Never observe windows, capture screens or
+// send input during packaging; service/CI sessions need not have a Default desktop.
+export function verifyWindowsComputerHelper(root,env,{run=spawnSync,commandFor}={}) {
+  commandFor??=createRequire(import.meta.url)(path.join(root,'desktop/windows-computer.cjs')).windowsHelperCommand;
+  const command=commandFor(root,env);
+  const result=run(command.file,command.args,{encoding:'utf8',timeout:20000,windowsHide:true,env,input:JSON.stringify({id:'package-status',action:'status'})+'\n'});
+  if(result.status!==0)throw Error('PACKAGED_WINDOWS_COMPUTER_FAILED');
+  let status;try{status=JSON.parse(result.stdout.trim());}catch{throw Error('PACKAGED_WINDOWS_COMPUTER_PROTOCOL');}
+  if(status.id!=='package-status'||status.ok!==true||typeof status.nativeReady!=='boolean'||status.nativeValidation!=='pending-windows-device')throw Error('PACKAGED_WINDOWS_COMPUTER_PROTOCOL');
+  return {statusProbePassed:true,nativeReady:status.nativeReady,nativeValidation:status.nativeValidation,...(status.nativeReason?{nativeReason:status.nativeReason}:{})};
+}
 
 export async function verifyPackagedApp(appPath,{expectedVersion,expectedCodexVersion,arch=process.arch,platform=process.platform}={}) {
   if(platform!==process.platform || arch!==process.arch)throw Error('PACKAGED_NATIVE_HOST_REQUIRED');
@@ -20,11 +33,11 @@ export async function verifyPackagedApp(appPath,{expectedVersion,expectedCodexVe
     'server/session-programs.mjs','shared/session-programs.js','channel-runtime/compat/onboarding.py',
     'native-engine/lib/engine.js','native-engine/lib/scripted-adapter.js','native-engine/lib/runtime.js','native-engine/lib/provider.js','native-engine/package-lock.json','native-engine/NOTICE.md','server/shared-context.mjs','server/shared-engine.mjs','server/session-workspaces.mjs','shared/engine-locales.js','server/plugins/engine-dsh-native.mjs',
     'desktop/process-supervisor.cjs','desktop/reliability.cjs','desktop/main.cjs','desktop/preload.cjs','desktop/support.cjs','desktop/locales/zh-CN.json','desktop/locales/en.json',
-    'server/engine-supervisor.mjs','server/task-recovery.mjs','shared/recovery-errors.js','server/index.mjs','server/plugin-host.mjs','server/data-directory.mjs','server/data-lock.mjs','server/event-clients.mjs','server/client-state.mjs','server/project-commands.mjs','server/session-history.mjs','server/document-drafts.mjs','server/git-drafts.mjs','server/files.mjs','server/resource-library.mjs','server/system-open.mjs','server/normalize.mjs','server/approvals.mjs','server/project-git.mjs','server/automation-runner.mjs','server/automations.mjs','server/project-pty.mjs','server/image-files.mjs','shared/image-errors.js','shared/mcp-elicitation.js','shared/mcp-elicitation-errors.js',...(platform==='darwin'?['native/bin/dsh-pty-helper','native/bin/dsh-computer-helper']:['node_modules/node-pty/package.json','server/windows-process.mjs','server/windows-job.cs']),'shared/local-tools-errors.js','shared/git-errors.js','shared/git-draft-errors.js','shared/file-errors.js','shared/plugin-errors.js','shell/index.html','shell/event-stream.js','shell/reconnect.js','shell/core.js','shell/core.css','shell/locales.js','shell/engine-providers.js','shell/recovery-view.js',
+    'server/engine-supervisor.mjs','server/task-recovery.mjs','shared/recovery-errors.js','server/index.mjs','server/plugin-host.mjs','server/data-directory.mjs','server/data-lock.mjs','server/event-clients.mjs','server/client-state.mjs','server/project-commands.mjs','server/session-history.mjs','server/document-drafts.mjs','server/git-drafts.mjs','server/files.mjs','server/resource-library.mjs','server/system-open.mjs','server/normalize.mjs','server/approvals.mjs','server/project-git.mjs','server/automation-runner.mjs','server/automations.mjs','server/project-pty.mjs','server/image-files.mjs','shared/image-errors.js','shared/mcp-elicitation.js','shared/mcp-elicitation-errors.js',...(platform==='darwin'?['native/bin/dsh-pty-helper','native/bin/dsh-computer-helper']:['node_modules/node-pty/package.json','server/windows-process.mjs','server/windows-job.cs','desktop/windows-computer.cjs','native/computer-helper.windows.ps1','native/computer-helper.windows.cs']),'shared/local-tools-errors.js','shared/git-errors.js','shared/git-draft-errors.js','shared/file-errors.js','shared/plugin-errors.js','shell/index.html','shell/event-stream.js','shell/reconnect.js','shell/core.js','shell/core.css','shell/locales.js','shell/engine-providers.js','shell/recovery-view.js',
     'shared/channel-runtime.js','server/channel-manager.mjs','server/channel-process.mjs','server/channel-store.mjs','server/channel-plugin.mjs','shared/channel-locales.js','channel-runtime/bridge.py','channel-runtime/UPSTREAM.json','channel-runtime/vendor/hermes/LICENSE','channel-runtime/requirements.lock',
     'dist/index.html','dist/main.js','dist/main.css','package.json',
     'engine/lib/engine.js','engine/lib/plugin.js','engine/lib/deepseek-profile.js','engine/lib/jsonrpc-client.js','engine/lib/history-pages.js','engine/lib/turn-reconciler.js',
-    'claude-engine/lib/engine.js','claude-engine/lib/plugin.js','claude-engine/lib/assistant-blocks.js','claude-engine/lib/policy.js',
+    'claude-engine/lib/engine.js','claude-engine/lib/cli-binary.js','claude-engine/lib/plugin.js','claude-engine/lib/assistant-blocks.js','claude-engine/lib/policy.js',
     ...['engine-codex','engine-claude-code','appearance-codex','feature-projects','feature-chat','feature-files','feature-terminal','feature-integrations','feature-deepseek-profile','feature-git','feature-automations','feature-images','feature-mcp-forms','channel-feishu','channel-qq','channel-weixin','channel-dingtalk','channel-wecom'].map(name=>'server/plugins/'+name+'.mjs'),
   ];
   const files=[];
@@ -66,7 +79,7 @@ export async function verifyPackagedApp(appPath,{expectedVersion,expectedCodexVe
   await access(binary,constants.X_OK);
   const verificationHome=await mkdtemp(path.join(tmpdir(),'dsh-packaged-probe-'));
   const environment=channelEnvironment(verificationHome,'en');
-  let version,pythonVersion;
+  let version,pythonVersion,computerStatus=null;
   try {
   // Version invocation is local and never starts an inference or reads the
   // original Codex application's login or history.
@@ -82,13 +95,13 @@ export async function verifyPackagedApp(appPath,{expectedVersion,expectedCodexVe
   const channelHome=await mkdtemp(path.join(tmpdir(),'dsh-packaged-channel-'));
   try{
     const python=channelPythonPath(channelRoot);await access(python,constants.X_OK);
-    const probe=spawnSync(python,['-I','-B','-c',`import sys,asyncio;sys.path.insert(0,sys.argv[1]);import bridge
+    const probe=spawnSync(python,['-I','-B','-c',`import sys,asyncio,platform,struct,json;sys.path.insert(0,sys.argv[1]);import bridge
 async def check():
  for platform in ['feishu','qq','weixin','dingtalk','wecom']:
   b=bridge.Bridge();b.configure({'platform':platform,'extra':{'allow_from':['fixture']}});await b.close()
 asyncio.run(check())
-bridge.WIRE.write(sys.version.split()[0])`,channelRoot],{encoding:'utf8',timeout:30000,windowsHide:true,env:channelEnvironment(channelHome,'en')});
-    if(probe.status!==0)throw Error('PACKAGED_CHANNEL_RUNTIME_FAILED: '+probe.stderr);pythonVersion=probe.stdout.trim().split('\n').at(-1);if(pythonVersion!==CHANNEL_PYTHON_VERSION)throw Error('PACKAGED_CHANNEL_PYTHON_VERSION');
+bridge.WIRE.write(json.dumps({'version':sys.version.split()[0],'platform':sys.platform,'bits':struct.calcsize('P')*8,'machine':platform.machine()}))`,channelRoot],{encoding:'utf8',timeout:30000,windowsHide:true,env:channelEnvironment(channelHome,'en')});
+    if(probe.status!==0)throw Error('PACKAGED_CHANNEL_RUNTIME_FAILED: '+probe.stderr);const target=JSON.parse(probe.stdout.trim().split('\n').at(-1));pythonVersion=target.version;if(pythonVersion!==CHANNEL_PYTHON_VERSION)throw Error('PACKAGED_CHANNEL_PYTHON_VERSION');if(target.platform!==platform||target.bits!==64||channelPythonArchitecture(target.machine)!==arch)throw Error('PACKAGED_CHANNEL_PYTHON_TARGET_MISMATCH');
   }finally{await rm(channelHome,{recursive:true,force:true});}
   const nativeLoop=JSON.parse(await readFile(path.join(root,'native-engine/node_modules/@deepseek-ai/dsh-agent-loop/package.json'),'utf8'));if(nativeLoop.version!=='0.2.1-rc.2')throw Error('PACKAGED_NATIVE_ENGINE_VERSION');
   let claudeCliBundled=false;
@@ -99,6 +112,7 @@ bridge.WIRE.write(sys.version.split()[0])`,channelRoot],{encoding:'utf8',timeout
     if(cli.status!==0)throw Error('PACKAGED_CLAUDE_CLI_UNAVAILABLE');claudeCliBundled=true;
   }
   if(platform==='win32') {
+    computerStatus=verifyWindowsComputerHelper(root,environment);
     // Loading alone misses DLL and ConPTY helper failures. Open a real local PTY
     // and wait for its exit; no profile, real account or model command is invoked.
     const ptySource=windowsPtyProbeSource(root,verificationHome);
@@ -106,7 +120,7 @@ bridge.WIRE.write(sys.version.split()[0])`,channelRoot],{encoding:'utf8',timeout
     if(pty.status!==0)throw Error('PACKAGED_WINDOWS_PTY_FAILED: '+pty.stderr);
   }
   const signature=platform==='darwin'?spawnSync('/usr/bin/codesign',['--verify','--deep','--strict',appPath],{encoding:'utf8',timeout:15000}):null;
-  return {checkedAt:new Date().toISOString(),appPath,bundleId,executable,platform,version:manifest.version,arch,frontendMode:'production',channelRuntime:{pythonVersion,upstream:upstream.commit,verifiedFiles:upstream.files.length,platforms:['feishu','qq','weixin','dingtalk','wecom']},engineVersion:version.stdout.trim(),nativeEngineVersion:nativeLoop.version,claudeSdkVersion:claudeSdk.version,claudeCliBundled,signatureVerified:signature?signature.status===0:null,files};
+  return {checkedAt:new Date().toISOString(),appPath,bundleId,executable,platform,version:manifest.version,arch,frontendMode:'production',channelRuntime:{pythonVersion,upstream:upstream.commit,verifiedFiles:upstream.files.length,platforms:['feishu','qq','weixin','dingtalk','wecom']},engineVersion:version.stdout.trim(),nativeEngineVersion:nativeLoop.version,claudeSdkVersion:claudeSdk.version,claudeCliBundled,computerStatus,signatureVerified:signature?signature.status===0:null,files};
   } finally {await rm(verificationHome,{recursive:true,force:true});}
 }
 

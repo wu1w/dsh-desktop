@@ -1,6 +1,10 @@
 import path from 'node:path';
 
 export const CHANNEL_PYTHON_VERSION = '3.12.14';
+export function channelPythonArchitecture(machine) {
+  const value=String(machine).trim().toLowerCase();
+  return ['x86_64','amd64','x64'].includes(value)?'x64':['arm64','aarch64'].includes(value)?'arm64':null;
+}
 export function channelPythonPath(root, platform = process.platform) {
   const paths = platform === 'win32' ? path.win32 : path;
   return paths.join(root, 'python', 'runtime', ...(platform === 'win32' ? ['python.exe'] : ['bin', 'python3']));

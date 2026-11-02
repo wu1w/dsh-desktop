@@ -8,7 +8,9 @@ import {translateRequest,translateJson,createStreamTranslator} from './wire-tran
 
 const fail=code=>{throw Object.assign(new Error(code),{code});};
 async function readText(stream,limit){const parts=[];let size=0;for await(const chunk of stream){const bytes=Buffer.from(chunk);size+=bytes.length;if(size>limit)fail('INVALID_REQUEST');parts.push(bytes);}return Buffer.concat(parts).toString('utf8');}
-const validModel=id=>typeof id==='string'&&id.length>0&&id.length<=180&&!/[\s\x00-\x1f\x7f]/.test(id);
+const CATALOG_LIMIT=8*1024*1024; // Match the existing client-state storage ceiling.
+const MODEL_LIMIT=10000;
+const validModel=(id,max=180)=>typeof id==='string'&&id.length>0&&id.length<=max&&!/[\s\x00-\x1f\x7f]/.test(id);
 const positive=(n,fallback)=>n==null||n===''?fallback:Number.isSafeInteger(Number(n))&&Number(n)>0&&Number(n)<=20_000_000?Number(n):fail('MODEL_CONFIG_INVALID');
 function endpoint(value){try{const url=new URL(value);if(!['https:','http:'].includes(url.protocol)||url.username||url.password||url.search||url.hash)fail('MODEL_ENDPOINT_INVALID');return url.href.replace(/\/$/,'');}catch{fail('MODEL_ENDPOINT_INVALID');}}
 function key(value){if(typeof value!=='string'||!value.trim()||!/^[\x21-\x7e]+$/.test(value.trim())||/^[A-Z_]+\s*=|^["']|["']$/.test(value.trim()))fail('MODEL_KEY_INVALID');return value.trim();}
@@ -17,9 +19,10 @@ export function providerURL(base,api,action='models'){
   return base+(api==='anthropic-messages'&&!base.endsWith('/v1')?'/v1':'')+'/'+action;
 }
 function normalize(input,old){
-  if(!input||typeof input!=='object'||!/^[-a-z0-9_]{1,40}$/.test(input.id)||['__proto__','constructor','prototype'].includes(input.id)||!MODEL_PROTOCOLS.includes(input.api)||typeof input.name!=='string'||!input.name.trim()||input.name.length>100||!Array.isArray(input.models)||input.models.length>500)fail('MODEL_CONFIG_INVALID');
+  const historical=input?.id==='opencode_go'&&old?.legacy===true;
+  if(!input||typeof input!=='object'||!/^[-a-z0-9_]{1,40}$/.test(input.id)||['__proto__','constructor','prototype'].includes(input.id)||!MODEL_PROTOCOLS.includes(input.api)||typeof input.name!=='string'||!input.name.trim()||input.name.length>100||!Array.isArray(input.models)||input.models.length>(historical?MODEL_LIMIT:500))fail('MODEL_CONFIG_INVALID');
   const baseURL=endpoint(input.baseURL),auth=input.auth??'key';if(!['key','none','legacy'].includes(auth)||auth==='legacy'&&(input.id!=='opencode_go'||new URL(baseURL).origin!=='https://opencode.ai'))fail('MODEL_CONFIG_INVALID');
-  const models=input.models.map(m=>{if(!m||!validModel(m.id)||m.name!=null&&(typeof m.name!=='string'||m.name.length>120))fail('MODEL_CONFIG_INVALID');return{id:m.id,name:m.name?.trim()||m.id,contextWindow:positive(m.contextWindow,131072),maxTokens:positive(m.maxTokens,8192),reasoning:m.reasoning===true};});
+  const models=input.models.map(m=>{if(!m||!validModel(m.id,historical?256:180)||m.name!=null&&(typeof m.name!=='string'||m.name.length>(historical?1024:120)))fail('MODEL_CONFIG_INVALID');return{id:m.id,name:m.name?.trim()||m.id,contextWindow:positive(m.contextWindow,131072),maxTokens:positive(m.maxTokens,8192),reasoning:m.reasoning===true};});
   if(new Set(models.map(m=>m.id)).size!==models.length)fail('MODEL_CONFIG_INVALID');
   const apiKey=input.apiKey===null?undefined:input.apiKey===undefined||input.apiKey===''?old?.apiKey:key(input.apiKey);
   if(old?.baseURL!==undefined&&old.baseURL!==baseURL&&!input.apiKey&&(old.apiKey||old.auth==='legacy'))fail('MODEL_KEY_REENTER');
@@ -29,7 +32,7 @@ function normalize(input,old){
 }
 export class ModelProviders{
   constructor({dataDir,legacyModels,resolveLegacyKey=async()=>null,isBusy=()=>false,isUsed=()=>false,onChange=()=>{},fetchImpl=fetch}){this.file=path.join(dataDir,'model-providers.json');this.legacyModels=legacyModels;this.resolveLegacyKey=resolveLegacyKey;this.isBusy=isBusy;this.isUsed=isUsed;this.onChange=onChange;this.fetch=fetchImpl;this.writing=Promise.resolve();this.controllers=new Set();this.state=null;}
-  async load(){try{const info=await lstat(this.file);if(!info.isFile()||info.isSymbolicLink()||info.size>4*1024*1024||(process.platform!=='win32'&&(info.mode&0o077)))fail('MODEL_STORAGE_INVALID');const value=JSON.parse(await readFile(this.file,'utf8'));if(value.version!==1||typeof value.revision!=='string'||!Array.isArray(value.providers)||value.providers.length>100)fail('MODEL_STORAGE_INVALID');value.providers=value.providers.map(p=>normalize(p,p));if(new Set(value.providers.map(p=>p.id)).size!==value.providers.length)fail('MODEL_STORAGE_INVALID');this.state=value;}catch(error){if(error.code!=='ENOENT')throw error;this.state={version:1,revision:randomUUID(),providers:[
+  async load(){try{const info=await lstat(this.file);if(!info.isFile()||info.isSymbolicLink()||info.size>CATALOG_LIMIT||(process.platform!=='win32'&&(info.mode&0o077)))fail('MODEL_STORAGE_INVALID');const value=JSON.parse(await readFile(this.file,'utf8'));if(value.version!==1||typeof value.revision!=='string'||!Array.isArray(value.providers)||value.providers.length>100)fail('MODEL_STORAGE_INVALID');value.providers=value.providers.map(p=>normalize(p,p));if(new Set(value.providers.map(p=>p.id)).size!==value.providers.length||value.providers.reduce((n,p)=>n+p.models.length,0)>MODEL_LIMIT)fail('MODEL_STORAGE_INVALID');this.state=value;}catch(error){if(error.code!=='ENOENT')throw error;this.state={version:1,revision:randomUUID(),providers:[
     // 默认让用户填 DeepSeek 官方密钥。官方 /models 只声明 anthropic_messages 能力，
     // 所以 Claude Code 走原生 Anthropic 端点，Codex 走宿主转换（responses -> completions）。
     {id:'deepseek',name:'DeepSeek',api:'openai-completions',baseURL:'https://api.deepseek.com',auth:'key',enabled:true,models:[
@@ -42,9 +45,15 @@ export class ModelProviders{
   // Keep those IDs (and metadata) so existing chats still resolve after upgrade.
   if(this.legacyModels?.length&&!await lstat(this.file).catch(()=>null)){
     const legacy=this.state.providers.find(p=>p.id==='opencode_go');
-    const migrated=this.legacyModels.filter(m=>m&&validModel(m.id)&&!m.id.startsWith('@'));
+    const migrated=this.legacyModels.filter(m=>m&&validModel(m.id,256)&&!m.id.startsWith('@'));
+    if(migrated.length>MODEL_LIMIT)fail('MODEL_STORAGE_INVALID');
     if(migrated.length){
-      const seen=new Set();legacy.models=[...migrated,...legacy.models].filter(m=>!seen.has(m.id)&&seen.add(m.id));
+      const seen=new Set();legacy.models=migrated.filter(m=>!seen.has(m.id)&&seen.add(m.id));
+      // Historical IDs own the existing client-state budget. Built-in defaults
+      // may fill free slots but must never replace history at the limit.
+      let remaining=MODEL_LIMIT-legacy.models.length;
+      for(const provider of this.state.providers){if(provider===legacy)continue;provider.models=provider.models.slice(0,remaining);remaining-=provider.models.length;}
+      if(remaining&&!seen.has('deepseek-v4.1-flash'))legacy.models.push({id:'deepseek-v4.1-flash',name:'DeepSeek V4.1 Flash',contextWindow:1000000,maxTokens:32000,reasoning:true});
       this.state.providers=this.state.providers.map(p=>normalize(p,p));
     }
   }
@@ -78,9 +87,9 @@ export class ModelProviders{
     try{await this.credential(p);}catch(error){error.providerId=p.id;error.action='open-model-settings';throw error;}
     return {ready:true,providerId:p.id,model:selection,engine,checks:['configuration','credential'],inferenceTested:false};
   }
-  async commit(next){const temporary=this.file+'.'+randomUUID()+'.tmp';let file;try{file=await open(temporary,'wx',0o600);await file.writeFile(JSON.stringify(next,null,2));await file.sync();await file.close();file=null;await rename(temporary,this.file);}finally{await file?.close();await rm(temporary,{force:true});}this.state=next;this.onChange();return this.public();}
+  async commit(next){const serialized=JSON.stringify(next,null,2);if(Buffer.byteLength(serialized)>CATALOG_LIMIT)fail('MODEL_STORAGE_INVALID');const temporary=this.file+'.'+randomUUID()+'.tmp';let file;try{file=await open(temporary,'wx',0o600);await file.writeFile(serialized);await file.sync();await file.close();file=null;await rename(temporary,this.file);}finally{await file?.close();await rm(temporary,{force:true});}this.state=next;this.onChange();return this.public();}
   mutate(body,remove=false){const operation=this.writing.then(async()=>{if(body.revision!==this.state.revision)fail('MODEL_CONFIG_CONFLICT');if(this.isBusy())fail('ENGINE_BUSY');const old=this.state.providers.find(p=>p.id===body.id);if(body.create===true&&old)fail('MODEL_PROVIDER_EXISTS');if(remove&&(!old||old.legacy))fail('MODEL_CONFIG_INVALID');if(remove&&this.isUsed(body.id))fail('MODEL_PROVIDER_IN_USE');let provider;if(!remove){provider=normalize(body,old);if(old&&old.models.some(m=>!provider.models.some(n=>n.id===m.id)&&this.isUsed(old.id,m.id)))fail('MODEL_PROVIDER_IN_USE');}
-    const rows=this.state.providers.filter(p=>p.id!==body.id);if(!remove)rows.splice(old?this.state.providers.indexOf(old):rows.length,0,provider);if(rows.length>100||rows.reduce((n,p)=>n+p.models.length,0)>10000)fail('MODEL_CONFIG_INVALID');return this.commit({...this.state,revision:randomUUID(),providers:rows});});this.writing=operation.catch(()=>{});return operation;}
+    const rows=this.state.providers.filter(p=>p.id!==body.id);if(!remove)rows.splice(old?this.state.providers.indexOf(old):rows.length,0,provider);if(rows.length>100||rows.reduce((n,p)=>n+p.models.length,0)>MODEL_LIMIT)fail('MODEL_CONFIG_INVALID');return this.commit({...this.state,revision:randomUUID(),providers:rows});});this.writing=operation.catch(()=>{});return operation;}
   async discover(body){
     const old=this.state.providers.find(p=>p.id===body.id);
     // A half-entered model row must not prevent fetching the list that fills it.

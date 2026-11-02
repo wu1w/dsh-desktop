@@ -1,10 +1,11 @@
 // Windows-only owned process launcher. A non-inheritable Job handle belongs to
-// this supervisor: normal exit, taskkill, or host shutdown closes it and kills
+// this supervisor: normal exit, owned stop event, or host shutdown closes it and kills
 // descendants, including descendants that created a separate console.
 using System;
 using System.ComponentModel;
 using System.Runtime.InteropServices;
 using System.Text;
+using System.Threading;
 namespace Dsh {
   public static class WindowsJob {
     [StructLayout(LayoutKind.Sequential)] struct STARTUPINFO {
@@ -44,13 +45,15 @@ namespace Dsh {
       }
       result.Append('\\',slashes*2);return result.Append('"').ToString();
     }
-    public static int Run(string executable,string[] args,int hostPid) {
-      IntPtr job=IntPtr.Zero,host=IntPtr.Zero; PROCESS_INFORMATION process=new PROCESS_INFORMATION();
+    public static int Run(string executable,string[] args,int hostPid,string stopName) {
+      IntPtr job=IntPtr.Zero,host=IntPtr.Zero; EventWaitHandle stop=null; PROCESS_INFORMATION process=new PROCESS_INFORMATION();
       try {
         // Keep a kernel handle to the launching host, not a polling PID.
         // Failure/host death before process creation fails closed.
         host=OpenProcess(0x100000,false,checked((uint)hostPid));Check(host!=IntPtr.Zero);
         if(WaitForSingleObject(host,0)!=258)return 125;
+        // EventWaitHandle is non-inheritable; only the owner knows this random name.
+        bool created;stop=new EventWaitHandle(false,EventResetMode.ManualReset,stopName,out created);Check(created);
         job=CreateJobObject(IntPtr.Zero,null);Check(job!=IntPtr.Zero);
         EXTENDED_LIMIT limits=new EXTENDED_LIMIT();limits.basic.flags=0x2000; // KILL_ON_JOB_CLOSE
         Check(SetInformationJobObject(job,9,ref limits,(uint)Marshal.SizeOf(typeof(EXTENDED_LIMIT))));
@@ -59,15 +62,16 @@ namespace Dsh {
         StringBuilder command=new StringBuilder(Quote(executable));foreach(string arg in args)command.Append(' ').Append(Quote(arg));
         Check(CreateProcess(executable,command,IntPtr.Zero,IntPtr.Zero,true,4,IntPtr.Zero,null,ref startup,out process));
         // No user code can run before its process belongs to our Job.
-        Check(AssignProcessToJobObject(job,process.process));if(WaitForSingleObject(host,0)!=258)return 125;Check(ResumeThread(process.thread)!=0xffffffff);
-        uint ended=WaitForMultipleObjects(2,new IntPtr[]{process.process,host},false,0xffffffff);
-        if(ended==1)return 125;Check(ended==0);uint code;Check(GetExitCodeProcess(process.process,out code));return unchecked((int)code);
+        Check(AssignProcessToJobObject(job,process.process));if(WaitForSingleObject(host,0)!=258||stop.WaitOne(0))return 125;Check(ResumeThread(process.thread)!=0xffffffff);
+        uint ended=WaitForMultipleObjects(3,new IntPtr[]{process.process,host,stop.SafeWaitHandle.DangerousGetHandle()},false,0xffffffff);
+        if(ended==1||ended==2)return 125;Check(ended==0);uint code;Check(GetExitCodeProcess(process.process,out code));return unchecked((int)code);
       } finally {
         // If assignment/resume failed, the suspended child must not survive.
         if(process.process!=IntPtr.Zero){TerminateProcess(process.process,125);CloseHandle(process.process);}
         if(process.thread!=IntPtr.Zero)CloseHandle(process.thread);
         if(job!=IntPtr.Zero)CloseHandle(job);
         if(host!=IntPtr.Zero)CloseHandle(host);
+        if(stop!=null)stop.Dispose();
       }
     }
   }

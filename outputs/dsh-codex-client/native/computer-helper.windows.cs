@@ -26,6 +26,7 @@ namespace DshComputer {
   [DllImport("user32.dll")] static extern bool EnumWindows(EnumWindow callback,IntPtr arg);
   [DllImport("user32.dll")] static extern bool IsWindowVisible(IntPtr window);
   [DllImport("user32.dll")] static extern bool IsWindow(IntPtr window);
+  [DllImport("user32.dll")] static extern bool IsWindowEnabled(IntPtr window);
   [DllImport("user32.dll")] static extern bool IsIconic(IntPtr window);
   [DllImport("user32.dll")] static extern IntPtr GetForegroundWindow();
   [DllImport("user32.dll")] static extern IntPtr GetAncestor(IntPtr window,uint flags);
@@ -97,8 +98,18 @@ namespace DshComputer {
    ObservedPid=pid;ObservedStarted=started;ObservedWindow=window;ObservedBounds=Bounds(window);Token=Guid.NewGuid().ToString();uint dpi=GetDpiForWindow(window);
    return Obj("platform","win32","pid",pid,"windowId",window.ToInt64().ToString(CultureInfo.InvariantCulture),"title",Limit(WindowName(window),300),"nativeObservation",Token,"elements",rows,"truncated",truncated||remaining<=0||stack.Count>0,"bounds",RectObject(ObservedBounds),"coordinateSpace","physical-screen-pixels","windowScaleFactor",dpi==0?1:dpi/96.0,"displays",Displays());
   }
-  static void Focus() {if(!InteractiveDesktop())Fail("COMPUTER_DESKTOP_UNAVAILABLE");TargetAllowed(ObservedPid);if(!IsWindow(ObservedWindow)||Owner(ObservedWindow)!=ObservedPid||Started(ObservedPid)!=ObservedStarted)Fail("COMPUTER_APP_GONE");if(IsIconic(ObservedWindow))Fail("COMPUTER_OBSERVATION_STALE");if(GetForegroundWindow()!=ObservedWindow){SetForegroundWindow(ObservedWindow);Thread.Sleep(80);}if(GetForegroundWindow()!=ObservedWindow)Fail("COMPUTER_FOCUS_CHANGED");if(!Equal(Bounds(ObservedWindow),ObservedBounds))Fail("COMPUTER_OBSERVATION_STALE");}
-  static bool WithinWindow(AutomationElement element) {var root=AutomationElement.FromHandle(ObservedWindow);for(int depth=0;element!=null&&depth<40;depth++,element=TreeWalker.RawViewWalker.GetParent(element))if(Automation.Compare(root,element))return true;return false;}
+  static void Focus() {if(!InteractiveDesktop())Fail("COMPUTER_DESKTOP_UNAVAILABLE");TargetAllowed(ObservedPid);if(!IsWindow(ObservedWindow)||Owner(ObservedWindow)!=ObservedPid||Started(ObservedPid)!=ObservedStarted)Fail("COMPUTER_APP_GONE");if(IsIconic(ObservedWindow))Fail("COMPUTER_OBSERVATION_STALE");if(!IsWindowEnabled(ObservedWindow))Fail("COMPUTER_FOCUS_CHANGED");if(GetForegroundWindow()!=ObservedWindow){SetForegroundWindow(ObservedWindow);Thread.Sleep(80);}if(GetForegroundWindow()!=ObservedWindow||!IsWindowEnabled(ObservedWindow))Fail("COMPUTER_FOCUS_CHANGED");if(!Equal(Bounds(ObservedWindow),ObservedBounds))Fail("COMPUTER_OBSERVATION_STALE");}
+  static bool WithinWindow(AutomationElement element) {
+   var root=AutomationElement.FromHandle(ObservedWindow);
+   for(int depth=0;element!=null&&depth<40;depth++,element=TreeWalker.RawViewWalker.GetParent(element)) {
+    // UIA can place an owned popup beneath its owner's accessibility root.
+    // Shared PID and AX ancestry do not authorize input into a different HWND.
+    int handle=element.Current.NativeWindowHandle;
+    if(handle!=0&&GetAncestor(new IntPtr(handle),2)!=ObservedWindow)return false;
+    if(Automation.Compare(root,element))return true;
+   }
+   return false;
+  }
   static AutomationElement Element(Dictionary<string,object> input) {int id=Integer(input,"element",0,239);if(id>=Elements.Count)Fail("COMPUTER_ELEMENT_STALE");var element=Elements[id];if(Signature(element)!=Signatures[id]||!element.Current.IsEnabled||!WithinWindow(element))Fail("COMPUTER_ELEMENT_STALE");return element;}
   static void Send(INPUT[] events) {
    int size=Marshal.SizeOf(typeof(INPUT));uint sent=SendInput((uint)events.Length,events,size);if(sent==(uint)events.Length)return;

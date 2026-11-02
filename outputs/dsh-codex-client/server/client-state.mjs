@@ -38,6 +38,7 @@ function validate(value){
     optional(row,'recoveredQueue',v=>Array.isArray(v)&&v.length<=10000&&v.every(item=>object(item)&&text(item.id,256)&&Array.isArray(item.input)));
     optional(row,'program',validProgram);
     optional(row,'runRecovery',v=>object(v)&&v.version===1&&text(v.id,256)&&(v.turnId===null||text(v.turnId,256))&&['running','waiting','interrupted','failed','uncertain','completed'].includes(v.status)&&(v.reason===null||text(v.reason,128))&&Number.isSafeInteger(v.attempt)&&v.attempt>=0&&(v.nextRetryAt===null||(text(v.nextRetryAt,100)&&Number.isFinite(Date.parse(v.nextRetryAt))))&&typeof v.canResume==='boolean'&&typeof v.userStopped==='boolean'&&typeof v.managed==='boolean'&&['read-only','workspace-write','danger-full-access'].includes(v.permission)&&['low','high','max'].includes(v.effort)&&text(v.updatedAt,100)&&Number.isFinite(Date.parse(v.updatedAt)));
+    optional(row,'abandonedRuns',v=>Array.isArray(v)&&v.length<=20&&v.every(run=>object(run)&&text(run.id,256)&&(run.turnId===null||text(run.turnId,256))&&['running','waiting','interrupted','failed','uncertain','completed'].includes(run.status)&&(run.reason===null||text(run.reason,128))&&run.outcome==='unknown'&&text(run.abandonedAt,100)&&Number.isFinite(Date.parse(run.abandonedAt))));
     optional(row,'parentSessionId',v=>v===null||(text(v,256)&&sessions.has(v)&&v!==row.id));
     if(row.parentSessionId)parents.set(row.id,row.parentSessionId);
     const thread=JSON.stringify([row.engineId??'codex',row.threadId]);valid(!threads.has(thread));threads.add(thread);

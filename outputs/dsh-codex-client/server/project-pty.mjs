@@ -5,6 +5,7 @@ import { randomUUID } from 'node:crypto';
 import { StringDecoder } from 'node:string_decoder';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import {windowsEnvironment,windowsShell,windowsJobCommand,killWindowsProcessTree} from './windows-process.mjs';
 
 const fault = code => Object.assign(new Error(code), { code });
 const sleep = ms => new Promise(resolve => setTimeout(resolve,ms));
@@ -34,12 +35,15 @@ function guardianDone(diagnostic) {
   return Number.isSafeInteger(guardian)&&guardian>1&&Number.isSafeInteger(session)&&session>1&&guardian!==session;
 }
 export class ProjectPtyManager {
-  constructor({ helperPath=path.resolve(path.dirname(fileURLToPath(import.meta.url)),'../native/bin/dsh-pty-helper'), shell='/bin/zsh', maxSessions=4, maxProjectSessions=2, maxOutputBytes=1024*1024, maxOutputBytesPerSecond=4*1024*1024, lifetimeMs=24*60*60*1000, env=process.env }={}) {
-    if (!['/bin/zsh','/bin/bash'].includes(shell)) throw fault('PTY_UNSUPPORTED');
+  constructor({ helperPath=path.resolve(path.dirname(fileURLToPath(import.meta.url)),'../native/bin/dsh-pty-helper'), shell, platform=process.platform, loadPty=()=>import('node-pty'), killTree=killWindowsProcessTree, maxSessions=4, maxProjectSessions=2, maxOutputBytes=1024*1024, maxOutputBytesPerSecond=4*1024*1024, lifetimeMs=24*60*60*1000, env=process.env }={}) {
+    shell??=platform==='win32'?windowsShell(env):'/bin/zsh';
+    if (platform==='win32'?!path.win32.isAbsolute(shell):!['/bin/zsh','/bin/bash'].includes(shell)) throw fault('PTY_UNSUPPORTED');
+    Object.assign(this,{platform,loadPty,killTree});
     Object.assign(this,{helperPath,shell,maxSessions,maxProjectSessions,maxOutputBytes,maxOutputBytesPerSecond,lifetimeMs});
     this.env=Object.fromEntries(['HOME','USER','LOGNAME','LANG','LC_ALL','LC_CTYPE','TMPDIR'].filter(key=>typeof env[key]==='string').map(key=>[key,env[key]]));
     const terminalPath=typeof env.PATH==='string'&&env.PATH.length>0&&env.PATH.length<=32768&&!env.PATH.includes('\0')?env.PATH:'/usr/bin:/bin:/usr/sbin:/sbin:/opt/homebrew/bin:/usr/local/bin';
     Object.assign(this.env,{PATH:terminalPath,TERM:'xterm-256color',COLORTERM:'truecolor',SHELL:shell,ZDOTDIR:'/var/empty'});
+    if(platform==='win32')this.env={...windowsEnvironment(env),TERM:'xterm-256color',COLORTERM:'truecolor'};
     this.sessions=new Map();this.pending=new Map();this.closed=false;
   }
   async create({projectId,cwd,cols=100,rows=30}) {
@@ -50,9 +54,10 @@ export class ProjectPtyManager {
     if(running.length+[...this.pending.values()].reduce((a,b)=>a+b,0)>=this.maxSessions||running.filter(value=>value.projectId===projectId).length+(this.pending.get(projectId)||0)>=this.maxProjectSessions)throw fault('PTY_SESSION_LIMIT');
     this.pending.set(projectId,(this.pending.get(projectId)||0)+1);
     try {
-      if(process.platform!=='darwin')throw fault('PTY_UNSUPPORTED');
+      if(!['darwin','win32'].includes(this.platform))throw fault('PTY_UNSUPPORTED');
       const canonical=await realpath(cwd).catch(()=>{throw fault('PTY_INVALID_CWD');});
       if(!(await stat(canonical)).isDirectory())throw fault('PTY_INVALID_CWD');
+      if(this.platform==='win32')return await this._createWindows({projectId,cwd:canonical,...size});
       await access(this.helperPath,constants.X_OK).catch(()=>{throw fault('PTY_HELPER_MISSING');});
       if(this.closed)throw fault('PTY_CLOSED');
       const child=spawn(this.helperPath,[canonical,String(cols),String(rows),this.shell],{cwd:canonical,env:this.env,detached:true,stdio:['pipe','pipe','pipe']});
@@ -91,6 +96,59 @@ export class ProjectPtyManager {
       return this.read(projectId,session.id);
     } finally {const remaining=(this.pending.get(projectId)||1)-1;if(remaining)this.pending.set(projectId,remaining);else this.pending.delete(projectId);}
   }
+  async _createWindows({projectId,cwd,cols,rows}) {
+    let module;try{module=await this.loadPty();}catch{throw fault('PTY_HELPER_MISSING');}
+    if(this.closed)throw fault('PTY_CLOSED');
+    const spawnPty=module.spawn??module.default?.spawn;
+    if(typeof spawnPty!=='function')throw fault('PTY_HELPER_MISSING');
+    const args=path.win32.basename(this.shell).toLowerCase()==='cmd.exe'?['/d']:['-NoLogo','-NoProfile'];
+    const launch=windowsJobCommand(this.shell,args,{env:this.env});
+    let pty;try{pty=spawnPty(launch.file,launch.args,{cwd,env:this.env,name:'xterm-256color',cols,rows,useConpty:true,useConptyDll:false});}catch{throw fault('PTY_START_FAILED');}
+    const session={id:randomUUID(),projectId,cols,rows,status:'running',exitCode:null,signal:null,pty,child:pty,output:Buffer.alloc(0),start:0,end:0,rateStart:Date.now(),outputRate:0,inputRate:0,inputRateStart:Date.now(),operationStart:Date.now(),operations:0,queuedBytes:0,stopping:null,cleanupPending:false,timer:null};
+    this.sessions.set(session.id,session);
+    session.done=new Promise(resolve=>{session.resolveDone=resolve;});
+    session.dataSubscription=pty.onData(text=>{
+      if(Date.now()-session.rateStart>=1000){session.rateStart=Date.now();session.outputRate=0;}
+      session.outputRate+=Buffer.byteLength(text);
+      if(session.outputRate>this.maxOutputBytesPerSecond){session.error='PTY_OUTPUT_LIMIT';void this._stopWindows(session).catch(()=>{});return;}
+      this._append(session,text);
+    });
+    session.exitSubscription=pty.onExit(({exitCode,signal})=>{
+      if(session.status==='exited')return;
+      if(exitCode===125&&session.output.toString('utf8').includes('DSH_WINDOWS_JOB_FAILED'))session.error='PTY_START_FAILED';
+      session.status='exited';session.exitCode=exitCode;session.signal=signal??null;clearTimeout(session.timer);
+      session.resolveDone();
+      // The Job supervisor closes its non-inherited handle on every exit.
+      // node-pty emits onExit only after closing the ConPTY output pipe.
+      if(!session.stopping){session.cleanupPending=false;session.stopError=null;session.dataSubscription?.dispose();session.exitSubscription?.dispose();}
+    });
+    // node-pty can emit an error event separately from onExit.
+    pty.on?.('error',()=>{session.error='PTY_START_FAILED';void this._stopWindows(session).catch(()=>{});});
+    session.timer=setTimeout(()=>{session.error='PTY_LIFETIME_LIMIT';void this._stopWindows(session).catch(()=>{});},this.lifetimeMs);session.timer.unref();
+    for(const old of this.sessions.values()){if(this.sessions.size<=32)break;if(old.status==='exited'&&!old.cleanupPending)this.sessions.delete(old.id);}
+    return this.read(projectId,session.id);
+  }
+  _stopWindows(session) {
+    if(session.status==='exited'&&!session.cleanupPending)return Promise.resolve();
+    if(session.stopping)return session.stopping;
+    session.cleanupPending=true;
+    const stopping=(async()=>{
+      try{
+        if(session.status!=='exited'){
+          // Kill the tree while its root still exists, then release ConPTY.
+          if(!await waitUntil(()=>session.pty.pid>0||session.status==='exited',5000))throw fault('PTY_STOP_FAILED');
+          if(session.status!=='exited'){try{await this.killTree(session.pty.pid,{env:this.env});}catch(error){if(session.status!=='exited')throw error;}}
+          if(session.status!=='exited')session.pty.kill();
+        }
+        if(!await waitUntil(()=>session.status==='exited',2500))throw fault('PTY_STOP_FAILED');
+        session.cleanupPending=false;session.stopError=null;
+        session.dataSubscription?.dispose();session.exitSubscription?.dispose();
+      }catch{session.stopError='PTY_STOP_FAILED';throw fault('PTY_STOP_FAILED');}
+    })();
+    session.stopping=stopping;
+    void stopping.finally(()=>{if(session.stopping===stopping)session.stopping=null;}).catch(()=>{});
+    return stopping;
+  }
   _append(session,text) {
     if(!text)return;
     const data=Buffer.from(text,'utf8');session.end+=data.length;
@@ -126,7 +184,7 @@ export class ProjectPtyManager {
     if(Date.now()-session.inputRateStart>=1000){session.inputRateStart=Date.now();session.inputRate=0;}
     if(session.inputRate+bytes.length>65536||session.queuedBytes+bytes.length>65536)throw fault('PTY_INPUT_LIMIT');
     session.inputRate+=bytes.length;session.queuedBytes+=bytes.length;
-    try {await new Promise((resolve,reject)=>{session.child.stdin.write(frame(1,bytes),error=>error?reject(fault('PTY_NOT_RUNNING')):resolve());});}
+    try {if(session.pty)session.pty.write(data);else await new Promise((resolve,reject)=>{session.child.stdin.write(frame(1,bytes),error=>error?reject(fault('PTY_NOT_RUNNING')):resolve());});}
     finally {session.queuedBytes-=bytes.length;}
     return {accepted:true};
   }
@@ -136,10 +194,11 @@ export class ProjectPtyManager {
     if(session.status!=='running'||session.stopping)throw fault('PTY_NOT_RUNNING');
     this._allowOperation(session);
     const bytes=Buffer.alloc(8);bytes.writeUInt32BE(cols,0);bytes.writeUInt32BE(rows,4);
-    await new Promise((resolve,reject)=>session.child.stdin.write(frame(2,bytes),error=>error?reject(fault('PTY_NOT_RUNNING')):resolve()));
+    if(session.pty)session.pty.resize(cols,rows);else await new Promise((resolve,reject)=>session.child.stdin.write(frame(2,bytes),error=>error?reject(fault('PTY_NOT_RUNNING')):resolve()));
     session.cols=cols;session.rows=rows;return {cols,rows};
   }
   async _stop(session) {
+    if(session.pty)return this._stopWindows(session);
     if(session.status==='exited'&&!session.cleanupPending)return;
     if(session.stopping)return session.stopping;
     session.cleanupPending=true;

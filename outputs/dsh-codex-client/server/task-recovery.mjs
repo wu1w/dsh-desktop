@@ -28,8 +28,8 @@ export function isTransientTurnError(error){
 // One durable checkpoint per chat. Native history remains the authority and
 // stores the actual input/tool results; this file never stores/replays prompts.
 export class TaskRecovery {
-  constructor({state,save,getEngine,getSelectedEngine,canRun=()=>true,onChange=()=>{},onError=()=>{},baseDelayMs=5000,maxDelayMs=300000,now=()=>Date.now(),setTimer=(fn,ms)=>setTimeout(fn,ms),clearTimer=id=>clearTimeout(id)}){
-    Object.assign(this,{state,save,getEngine,getSelectedEngine,canRun,onChange,onError,baseDelayMs,maxDelayMs,now,setTimer,clearTimer});
+  constructor({state,save,getEngine,getSelectedEngine,canRun=()=>true,preflight=async()=>{},onChange=()=>{},onError=()=>{},baseDelayMs=5000,maxDelayMs=300000,now=()=>Date.now(),setTimer=(fn,ms)=>setTimeout(fn,ms),clearTimer=id=>clearTimeout(id)}){
+    Object.assign(this,{state,save,getEngine,getSelectedEngine,canRun,preflight,onChange,onError,baseDelayMs,maxDelayMs,now,setTimer,clearTimer});
     this.serial=new Map();this.timers=new Map();this.timerEpoch=new Map();this.intentEpoch=new Map();this.stopIntents=new Set();this.closed=false;this.storageFailed=false;
   }
   _sequence(session,work){
@@ -50,6 +50,10 @@ export class TaskRecovery {
       if(this.closed||!this.canRun())throw fault('HOST_STOPPING');
       if(this.storageFailed)throw fault('TASK_RECOVERY_STORAGE');
       if(pending.has(session.runRecovery?.status))throw fault('TASK_RECOVERY_PENDING');
+      const intent=this.intentEpoch.get(session.id)??0;
+      await this.preflight(session,input,options);
+      if(this.closed||!this.canRun())throw fault('HOST_STOPPING');
+      if((this.intentEpoch.get(session.id)??0)!==intent)throw fault('TASK_NOT_RESUMABLE');
       this._cancel(session.id);this.stopIntents.delete(session.id);
       session.runRecovery=this._new(options);await this._save();
       return this._dispatch(session,input,options,dispatch);
@@ -72,12 +76,13 @@ export class TaskRecovery {
       throw error;
     }
   }
-  observe(session,note){
-    if(this.closed||!['turn/started','turn/completed'].includes(note.method)||!note.params?.turn?.id)return Promise.resolve();
+  observe(session,note,sourceEngine=this.getEngine()){
+    if(this.closed||!sourceEngine||sourceEngine!==this.getEngine()||!['turn/started','turn/completed'].includes(note.method)||!note.params?.turn?.id)return Promise.resolve();
     const turn=note.params.turn;
     return this._sequence(session,async()=>{
-      if(this.closed)return;
+      if(this.closed||sourceEngine!==this.getEngine())return;
       const old=session.runRecovery;
+      if(old?.reason==='abandoned'||session.abandonedRuns?.some(run=>run.turnId===turn.id))return;
       if(note.method==='turn/started'){
         if(old?.turnId===turn.id&&terminal.has(old.status))return;
         if(!old||old.turnId&&old.turnId!==turn.id){session.runRecovery=this._new({sandbox:old?.permission,effort:old?.effort},!session.automationId);}
@@ -114,7 +119,7 @@ export class TaskRecovery {
   }
   async _resume(session,manual,locale){
     const run=session.runRecovery,intent=this.intentEpoch.get(session.id)??0;
-    if(!run||this.closed||(!manual&&this.storageFailed)||session.archived)throw fault('TASK_NOT_RESUMABLE');
+    if(!run||run.reason==='abandoned'||this.closed||(!manual&&this.storageFailed)||session.archived)throw fault('TASK_NOT_RESUMABLE');
     if(manual&&this.storageFailed){await this._save();this.storageFailed=false;}
     if(!manual&&(run.userStopped||this.stopIntents.has(session.id)||!run.managed||!this.canRun()))return;
     this._cancel(session.id);
@@ -142,9 +147,16 @@ export class TaskRecovery {
     catch(error){this._set(session,{status:manual?'uncertain':'waiting',reason:run.reason??'engine_unavailable',canResume:true});await this._save();if(!manual)this._schedule(session);if(manual)throw error;return;}
     if(queued?.data?.length||session.recoveredQueue?.length){this._set(session,{status:'interrupted',reason:'queue_pending',canResume:true,nextRetryAt:null});await this._save();if(manual)throw fault('TASK_QUEUE_PENDING');return;}
     if(!this._owns(session,engine)||(this.intentEpoch.get(session.id)??0)!==intent||this.stopIntents.has(session.id)&&!manual) return;
+    const input=[{type:'text',text:continuationText(locale??this.state.preferences?.locale),text_elements:[]}],options={sandbox:run.permission,effort:run.effort};
+    try{await this.preflight(session,input,options);}catch(error){
+      // No request was submitted. Configuration failures must not leave a
+      // waiting/uncertain lock that prevents the user fixing their provider.
+      this._set(session,{status:'failed',reason:'preflight_failed',userStopped:true,canResume:true,nextRetryAt:null});await this._save();throw error;
+    }
+    if(!this._owns(session,engine)||(this.intentEpoch.get(session.id)??0)!==intent||this.stopIntents.has(session.id)&&!manual)return;
     if(manual){this.stopIntents.delete(session.id);this.storageFailed=false;}
     this._set(session,{status:'uncertain',reason:'resuming',turnId:null,userStopped:false,canResume:false,nextRetryAt:null,attempt:Math.min(Number.MAX_SAFE_INTEGER,(run.attempt??0)+1)});await this._save();
-    return this._dispatch(session,[{type:'text',text:continuationText(locale??this.state.preferences?.locale),text_elements:[]}],{sandbox:run.permission,effort:run.effort});
+    return this._dispatch(session,input,options);
   }
   resume(session,locale){return this._sequence(session,()=>this._resume(session,true,locale));}
   async stop(session,reason='user_stopped'){
@@ -155,6 +167,30 @@ export class TaskRecovery {
       let storageError;try{await this._save();}catch(error){storageError=error;}
       const engine=this.getEngine();if(engine?.ready&&engine.activeTurns.has(session.id))await engine.interrupt(session.id);
       if(storageError)throw storageError;return {ok:true};
+    });
+  }
+  abandon(session){
+    if(this.getEngine()!=null)return Promise.reject(fault('TASK_ABANDON_REQUIRES_STOP'));
+    // A missing active turn is not proof that an unacknowledged request ended.
+    // The host must first dispose the owning engine (and its process), fence
+    // admissions, and set getEngine() to null. This action never dispatches.
+    this.stopIntents.add(session.id);this.intentEpoch.set(session.id,(this.intentEpoch.get(session.id)??0)+1);this._cancel(session.id);
+    return this._sequence(session,async()=>{
+      if(this.closed)throw fault('HOST_STOPPING');
+      if(this.getEngine()!=null)throw fault('TASK_ABANDON_REQUIRES_STOP');
+      const run=session.runRecovery;
+      if(!run||run.status==='completed')throw fault('TASK_NOT_RESUMABLE');
+      if(run.reason==='abandoned')return {ok:true,abandoned:true};
+      const prior=copy(run),priorRecords=session.abandonedRuns;
+      const evidence={id:run.id,turnId:run.turnId,status:run.status,reason:run.reason,abandonedAt:new Date(this.now()).toISOString(),outcome:'unknown'};
+      session.abandonedRuns=[...(priorRecords??[]),evidence].slice(-20);
+      this._set(session,{status:'interrupted',reason:'abandoned',userStopped:true,managed:false,canResume:false,nextRetryAt:null});
+      try{await this._save();}catch(error){
+        // Do not unlock in memory unless the evidence and stop are durable.
+        session.runRecovery=prior;if(priorRecords===undefined)delete session.abandonedRuns;else session.abandonedRuns=priorRecords;
+        throw error;
+      }
+      return {ok:true,abandoned:true};
     });
   }
   async engineExited(engineId){

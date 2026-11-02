@@ -2,6 +2,7 @@ import {randomUUID} from 'node:crypto';
 import {computerTool} from '../shared/computer-tool.js';
 export const computerErrors={
  COMPUTER_UNAVAILABLE:['电脑操作仅在本机 DSH 桌面应用中可用。','Computer Use is available in the local DSH desktop app.'],
+ COMPUTER_NATIVE_UNSUPPORTED:['此系统尚未提供本机应用控制。Windows 可使用 DSH 浏览器；本机应用控制仍待实现和实机验收。','Native desktop control is not implemented on this platform. Use the DSH browser on Windows; native app control still requires implementation and device validation.'],
  COMPUTER_NOT_CONNECTED:['请先在加号菜单的“使用电脑”中连接一个目标。','Connect a target from Use computer in the plus menu first.'],
  COMPUTER_STOPPED:['电脑控制已停止，请由用户重新连接。','Computer control stopped. The user must reconnect it.'],
  COMPUTER_ACCESSIBILITY_REQUIRED:['请在系统设置中允许 DSH 的辅助功能访问，然后重新检查。','Allow DSH Accessibility access in System Settings, then check again.'],
@@ -33,8 +34,9 @@ export class ComputerUse {
  async connect(id,target){
   if(this.closed||!this.runtime)throw fault('COMPUTER_UNAVAILABLE');const session=this.state.sessions.find(s=>s.id===id);if(!session||session.archived||session.channel||session.kind==='agent')throw fault('COMPUTER_NOT_CONNECTED');
   let binding={kind:'browser',name:'browser'};
-  if(target?.kind==='app'){const {apps}=await this.apps();const app=apps.find(row=>row.pid===target.pid);if(!app)throw fault('COMPUTER_APP_GONE');const status=await this.status();if(!status.accessibility)throw fault('COMPUTER_ACCESSIBILITY_REQUIRED');if([...this.sessions].some(([other,entry])=>other!==id&&entry.target.kind==='app'&&entry.target.pid===app.pid))throw fault('COMPUTER_BUSY');binding={kind:'app',pid:app.pid,name:app.name,bundleId:app.bundleId};}
+  if(target?.kind==='app'){const status=await this.status();if(status.nativeAvailable===false)throw fault(status.nativeReason==='COMPUTER_NATIVE_UNSUPPORTED'?'COMPUTER_NATIVE_UNSUPPORTED':'COMPUTER_NATIVE_UNAVAILABLE');const {apps}=await this.apps();const app=apps.find(row=>row.pid===target.pid);if(!app)throw fault('COMPUTER_APP_GONE');if(!status.accessibility)throw fault('COMPUTER_ACCESSIBILITY_REQUIRED');if([...this.sessions].some(([other,entry])=>other!==id&&entry.target.kind==='app'&&entry.target.pid===app.pid))throw fault('COMPUTER_BUSY');binding={kind:'app',pid:app.pid,name:app.name,bundleId:app.bundleId};}
   else if(target?.kind!=='browser')throw fault('COMPUTER_INVALID_INPUT');
+  else {const status=await this.status();if(status.available===false||status.browserAvailable===false)throw fault('COMPUTER_UNAVAILABLE');}
   if(this.closed)throw fault('COMPUTER_STOPPED');this.stop(id);const entry={target:binding,abort:new AbortController(),step:0,busy:false,last:null,observation:null,nativeObservation:null};this.sessions.set(id,entry);this.changed(id);
   try{return await this.execute(id,{action:'observe'},{fromUser:true});}catch(error){if(this.sessions.get(id)===entry)this.stop(id);throw error;}
  }

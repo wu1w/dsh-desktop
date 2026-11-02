@@ -1,23 +1,27 @@
 import {spawn} from 'node:child_process';
 import {EventEmitter} from 'node:events';
 import {randomUUID} from 'node:crypto';
-import {access} from 'node:fs/promises';
+import {access,stat} from 'node:fs/promises';
+import {constants} from 'node:fs';
 import path from 'node:path';
 import {StringDecoder} from 'node:string_decoder';
+import {channelPythonPath,channelEnvironment} from '../shared/channel-runtime.js';
 import {channelFault} from './channel-store.mjs';
 
 export class ChannelProcess extends EventEmitter{
   constructor({root,home,platform,locale,onIncoming,spawnProcess=spawn}){super();Object.assign(this,{root,home,platform,locale,onIncoming,spawnProcess});this.pending=new Map();this.child=null;this.stopping=false;this.connected=false;}
   async start(config,{connect=true}={}){
-    const python=path.join(this.root,'python/runtime/bin/python3');await access(python);await access(path.join(this.root,'bridge.py'));
+    const python=channelPythonPath(this.root);
+    try{await access(python,constants.X_OK);if(!(await stat(python)).isFile()||!(await stat(path.join(this.root,'bridge.py'))).isFile())throw channelFault('CHANNEL_RUNTIME_MISSING');}
+    catch(error){if(['ENOENT','ENOTDIR','EACCES','EPERM','CHANNEL_RUNTIME_MISSING'].includes(error.code))throw channelFault('CHANNEL_RUNTIME_MISSING');throw error;}
     if(this.child)throw channelFault('CHANNEL_BUSY');
-    this.stopping=false;this.buffer='';this.decoder=new StringDecoder('utf8');this.child=this.spawnProcess(python,['-I','-B','-u',path.join(this.root,'bridge.py')],{cwd:this.root,stdio:['pipe','pipe','pipe'],env:{PATH:'/usr/bin:/bin',HOME:this.home,TMPDIR:this.home,DSH_CHANNEL_HOME:this.home,DSH_LOCALE:this.locale,...Object.fromEntries(['HTTP_PROXY','HTTPS_PROXY','ALL_PROXY','NO_PROXY','http_proxy','https_proxy','all_proxy','no_proxy','SSL_CERT_FILE','SSL_CERT_DIR'].filter(k=>process.env[k]).map(k=>[k,process.env[k]]))}});
+    this.stopping=false;this.buffer='';this.decoder=new StringDecoder('utf8');this.child=this.spawnProcess(python,['-I','-B','-u',path.join(this.root,'bridge.py')],{cwd:this.root,stdio:['pipe','pipe','pipe'],windowsHide:true,env:channelEnvironment(this.home,this.locale)});
     const child=this.child;
     this.exited=new Promise(resolve=>{this.resolveExit=resolve;});
     const ready=new Promise((resolve,reject)=>{this.ready={resolve,reject};});
     child.stdout.on('data',data=>this._data(child,data));child.stderr.on('data',()=>{});
     child.stdin.on('error',()=>{if(this.child===child){this.connected=false;this._rejectAll('CHANNEL_PROCESS_EXITED');}});
-    child.on('error',()=>{if(child.pid==null)this._exit(child);});child.once('exit',()=>this._exit(child));
+    child.on('error',error=>{if(child.pid==null){this.ready?.reject(channelFault(['ENOENT','EACCES','EPERM'].includes(error.code)?'CHANNEL_RUNTIME_MISSING':'CHANNEL_RUNTIME_FAILED'));this._exit(child);}});child.once('exit',()=>this._exit(child));
     const timer=setTimeout(()=>{this.ready?.reject(channelFault('CHANNEL_RUNTIME_TIMEOUT'));},15000);
     try{await ready;await this.request('configure',{platform:this.platform,...config});if(connect){const result=await this.request('connect',{},50000);this.connected=result.connected;return result;}return {configured:true};}
     catch(error){await this.stop().catch(()=>{});throw error;}

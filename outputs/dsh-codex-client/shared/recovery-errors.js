@@ -1,4 +1,5 @@
 export const recoveryErrors={
+  TASK_ABANDON_REQUIRES_STOP:['请先停止此执行引擎，再放弃自动恢复。未知执行结果会保留，不会重发任务。','Stop this execution engine before abandoning recovery. The unknown outcome will be retained and the task will not be resent.'],
   TASK_RECOVERY_PENDING:['此任务正在恢复，请先停止或等待恢复后再发送。','This task is recovering. Stop it or wait for recovery before sending.'],
   TASK_STATE_UNVERIFIED:['尚未核实上一轮是否结束，已保留任务。请稍后重试继续任务。','The previous turn has not been verified as ended. The task is preserved. Retry Resume later.'],
   TASK_NOT_RESUMABLE:['此任务已经完成或仍在执行。','This task is already complete or still running.'],

@@ -83,3 +83,58 @@ test('an uncertain start can be stopped without falsely confirming a native inte
 test('manual continuation uses the request locale even before a preference save completes',async()=>{
  const s=setup();try{await s.recovery.start(s.session,'x');await s.failed();await s.recovery.resume(s.session,'zh-CN');assert.match(s.calls[1].input[0].text,/继续完成/);assert.equal(s.state.preferences.locale,'en');}finally{await s.close();}
 });
+
+test('preflight failure preserves previous run and dispatches nothing before a checkpoint',async()=>{
+ const failure=Object.assign(Error('missing key'),{code:'MODEL_KEY_REQUIRED'}),s=setup({preflight:async()=>{throw failure;}});
+ try{await assert.rejects(s.recovery.start(s.session,'private prompt'),{code:'MODEL_KEY_REQUIRED'});assert.equal(s.session.runRecovery,undefined);assert.equal(s.saved.length,0);assert.equal(s.calls.length,0);assert.equal(s.timers.size,0);}
+ finally{await s.close();}
+});
+test('stop while preflight is pending prevents the validated task from dispatching',async()=>{
+ const gate=deferred(),s=setup({preflight:()=>gate.promise});
+ try{const start=s.recovery.start(s.session,'do not send'),rejected=assert.rejects(start,{code:'TASK_NOT_RESUMABLE'});await tick();const stop=s.recovery.stop(s.session);gate.resolve();await rejected;await stop;assert.equal(s.calls.length,0);assert.equal(s.session.runRecovery,undefined);}
+ finally{await s.close();}
+});
+test('a recovery preflight failure unlocks configuration without replaying the task',async()=>{
+ let ready=true;const s=setup({preflight:async()=>{if(!ready)throw Object.assign(Error('key removed'),{code:'MODEL_KEY_REQUIRED'});}});
+ try{await s.recovery.start(s.session,'original');await s.failed();ready=false;await assert.rejects(s.recovery.resume(s.session),{code:'MODEL_KEY_REQUIRED'});assert.equal(s.calls.length,1);assert.equal(s.session.runRecovery.status,'failed');assert.equal(s.session.runRecovery.reason,'preflight_failed');assert.equal(s.session.runRecovery.turnId,'turn-1');assert.equal(s.timers.size,0);await s.recovery.recover();assert.equal(s.calls.length,1);ready=true;await s.recovery.resume(s.session);assert.equal(s.calls.length,2);assert.notEqual(s.calls[1].input,'original');}
+ finally{await s.close();}
+});
+test('an uncertain no-ACK request requires full engine disposal before abandonment and never replays',async()=>{
+ const s=setup();try{
+  s.engine.startTurn=async()=>{throw Object.assign(Error('TIMEOUT'),{code:'TIMEOUT'});};
+  await assert.rejects(s.recovery.start(s.session,'original secret input'),{code:'TIMEOUT'});
+  const old=structuredClone(s.session.runRecovery);
+  s.engine.ready=false;await assert.rejects(s.recovery.abandon(s.session),{code:'TASK_ABANDON_REQUIRES_STOP'});
+  assert.equal(s.session.runRecovery.status,'uncertain');
+  s.recovery.getEngine=()=>null;
+  assert.deepEqual(await s.recovery.abandon(s.session),{ok:true,abandoned:true});
+  assert.equal(s.session.runRecovery.status,'interrupted');assert.equal(s.session.runRecovery.canResume,false);
+  assert.deepEqual(s.session.abandonedRuns,[{id:old.id,turnId:null,status:'uncertain',reason:'start_unverified',abandonedAt:new Date(100000).toISOString(),outcome:'unknown'}]);
+  assert.equal(JSON.stringify(s.state).includes('original secret input'),false);assert.equal(s.calls.length,0);
+  await s.recovery.abandon(s.session);assert.equal(s.session.abandonedRuns.length,1);
+  await assert.rejects(s.recovery.resume(s.session),{code:'TASK_NOT_RESUMABLE'});await s.recovery.recover();assert.equal(s.calls.length,0);
+ }finally{await s.close();}
+});
+test('abandonment evidence is durable and late old-engine notifications cannot alter a new run',async()=>{
+ const s=setup();try{
+  await s.recovery.start(s.session,'old');s.engine.activeTurns.clear();
+  s.recovery.getEngine=()=>null;await s.recovery.abandon(s.session);
+  const current={...s.engine,activeTurns:new Map()};s.recovery.getEngine=()=>current;
+  const gate=deferred();current.startTurn=()=>gate.promise;
+  const start=s.recovery.start(s.session,'new');await tick();
+  const late=s.recovery.observe(s.session,note('turn/completed','unknown-old-turn','completed'),s.engine);
+  gate.resolve({turn:{id:'new-turn',status:'inProgress'}});await start;await late;
+  await s.recovery.observe(s.session,note('turn/started','turn-1','inProgress'),current);
+  assert.equal(s.session.runRecovery.turnId,'new-turn');assert.equal(s.session.runRecovery.status,'running');
+  await s.recovery.observe(s.session,note('turn/completed','new-turn','completed'),current);
+  assert.equal(s.session.runRecovery.status,'completed');assert.equal(s.session.abandonedRuns.length,1);
+ }finally{await s.close();}
+});
+test('failed abandonment persistence retains the uncertain lock and reports storage failure',async()=>{
+ const s=setup();try{
+  s.engine.startTurn=async()=>{throw Error('unknown');};await assert.rejects(s.recovery.start(s.session,'old'));
+  const old=structuredClone(s.session.runRecovery);s.recovery.getEngine=()=>null;s.setSave(async()=>{throw Error('disk full');});
+  await assert.rejects(s.recovery.abandon(s.session),{code:'TASK_RECOVERY_STORAGE'});
+  assert.deepEqual(s.session.runRecovery,old);assert.equal(s.session.abandonedRuns,undefined);assert.equal(s.calls.length,0);
+ }finally{await s.close();}
+});

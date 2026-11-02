@@ -37,7 +37,7 @@ export async function initCapability({ signal, timeoutMs = 15000 } = {}) {
 export async function api(route, body, method = body === undefined ? 'GET' : 'POST', {signal} = {}) {
   const response = await fetch(`/api/${route}`, { method, credentials: 'same-origin', signal, headers: { 'Content-Type': 'application/json', 'X-DSH-Capability': capability, 'Accept-Language': document.documentElement.lang }, body: body === undefined ? undefined : JSON.stringify(body) });
   const data = await response.json();
-  if (!response.ok) {const error=new Error(data.message??data.error??`HTTP_${response.status}`);error.code=typeof data.error==='string'?data.error:typeof data.code==='string'?data.code:null;throw error;}
+  if (!response.ok) {const error=new Error(data.message??data.error??`HTTP_${response.status}`);error.code=typeof data.error==='string'?data.error:typeof data.code==='string'?data.code:null;if(data.action==='open-model-settings')error.action=data.action;throw error;}
   return data;
 }
 export async function eventStream(onEvent, signal, options = {}) {

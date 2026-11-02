@@ -20,7 +20,8 @@ const integrations=host.integrations;
         if (segments[0] === 'sessions' && segments.length === 1 && request.method === 'POST') {
           const project = body.projectId==null?null:getProject(body.projectId); const e = requireEngine(); const id = randomUUID();
           const cwd=await ensureSessionWorkspace({id,projectId:project?.id??null});
-          const requestedModel=body.model??'deepseek-v4.1-flash';if(!(state.models??[{id:'deepseek-v4.1-flash'}]).some(model=>model.id===requestedModel))fail('INVALID_REQUEST');
+          const requestedModel=body.model??state.models?.find(model=>model.available!==false)?.id??state.models?.[0]?.id;if(!(state.models??[{id:'deepseek-v4.1-flash'}]).some(model=>model.id===requestedModel))fail('INVALID_REQUEST');
+          await host.preflightModel?.(requestedModel);
           const mapped = await e.createSession(id, { cwd, model:requestedModel });
           const session = { id, projectId: project?.id??null, engineId:getSelectedEngine(),kind:body.kind==='agent'?'agent':'chat',parentSessionId:body.parentSessionId&&state.sessions.some(s=>s.id===body.parentSessionId)?body.parentSessionId:null,model:mapped.model,instructionProfile:mapped.instructionProfile??null,title: typeof body.title === 'string' ? body.title.slice(0,100) : '', threadId: mapped.threadId, archived: false, pinned: false, createdAt:new Date().toISOString(), updatedAt: new Date().toISOString() };
           state.sessions.unshift(session); transcripts.set(id, []); await save(); broadcastState(); json(session); return;
@@ -35,12 +36,13 @@ const integrations=host.integrations;
           if(action==='attachments'){if(!host.hasFeature('feature-files'))fail('PLUGIN_DISABLED');const cwd=await ensureSessionWorkspace(session);json({files:await saveAttachments(cwd,body.files)});return;}
           if(action==='program'){json(body.action?await programs.action(session,body.action):await programs.start(session,body));return;}
           if(action==='interrupt'){host.computer?.stop(session.id);if(session.program?.status==='active')await programs.action(session,'pause');json(await host.taskRecovery.stop(session));return;}
+          if(action==='abandon'){json(await host.abandonTask(session));broadcastState();return;}
           if(action==='resume'){json(await host.taskRecovery.resume(session,locale));broadcastState();return;}
           if(['pin','unread','read'].includes(action)){if(action==='pin')session.pinned=!session.pinned;else session.unread=action==='unread';await save();broadcastState();json(session);return;}
           const e = requireEngine(session);
           if(action==='queue'){return await host.runQueueMutation(session.id,async()=>{
             const operation=segments[3];
-            if(operation==='add'){const input=await turnInputs(project,body);json(await e.queueRequest(session.id,'add',{input,clientUserMessageId:randomUUID()}));void sendQueue(session);return;}
+            if(operation==='add'){const input=await turnInputs(project,body);await host.preflightModel?.(session.model,input);json(await e.queueRequest(session.id,'add',{input,clientUserMessageId:randomUUID()}));void sendQueue(session);return;}
             const queue=await readQueue(session);
             const entry=queue.find(item=>item.id===body.id);
             if(operation==='reorder'){
@@ -70,6 +72,7 @@ const integrations=host.integrations;
           });}
           if (action === 'turn') {
             const inputs=await turnInputs(project,body);
+            await host.preflightModel?.(session.model,inputs);
             const mode=body.followUpBehavior??state.preferences.followUpBehavior??'queue';
             const started = e.activeTurns.has(session.id) ? mode==='steer'?await e.steer(session.id,inputs):await e.queueRequest(session.id,'add',{input:inputs,clientUserMessageId:randomUUID()}) : await host.taskRecovery.start(session, inputs, { sandbox: body.permission ?? 'read-only', effort: ['low','high','max'].includes(body.effort) ? body.effort : 'high' });
             void sendQueue(session);

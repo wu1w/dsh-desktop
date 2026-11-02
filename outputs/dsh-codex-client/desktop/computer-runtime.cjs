@@ -22,10 +22,11 @@ const browserAction=(input)=>{
  else if(input.action==='scroll'){state.token='';window.scrollBy({left:input.direction==='right'?600:input.direction==='left'?-600:0,top:input.direction==='up'?-600:input.direction==='down'?600:0,behavior:'instant'});}
  else if(input.action==='key'){if(node)node.focus();state.token='';}
 };
-function createComputerRuntime({app,locale=()=> 'zh-CN'}){
+function createComputerRuntime({app,locale=()=> 'zh-CN',platform=process.platform}){
  let child=null,pending=new Map(),buffer='',closed=false,disconnected=()=>{};const browsers=new Map();
  function native(input,signal){return new Promise((resolve,reject)=>{
   if(closed)return reject(Object.assign(Error('COMPUTER_STOPPED'),{code:'COMPUTER_STOPPED'}));
+  if(platform!=='darwin')return reject(Object.assign(Error('COMPUTER_NATIVE_UNSUPPORTED'),{code:'COMPUTER_NATIVE_UNSUPPORTED'}));
   if(!child){child=spawn(path.join(__dirname,'../native/bin/dsh-computer-helper'),[],{stdio:['pipe','pipe','pipe']});const bound=child;
    child.stdout.setEncoding('utf8');child.stdout.on('data',chunk=>{buffer+=chunk;if(buffer.length>4000000){bound.kill();return;}let end;while((end=buffer.indexOf('\n'))>=0){const line=buffer.slice(0,end);buffer=buffer.slice(end+1);try{const value=JSON.parse(line);const task=pending.get(value.id);if(task){task.finish();value.ok?task.resolve(value):task.reject(Object.assign(Error(value.code),{code:value.code}));}}catch{}}});
    const exit=()=>{if(child!==bound)return;child=null;buffer='';for(const task of [...pending.values()]){task.finish();task.reject(Object.assign(Error('COMPUTER_NATIVE_UNAVAILABLE'),{code:'COMPUTER_NATIVE_UNAVAILABLE',actionSent:true}));}};
@@ -48,11 +49,19 @@ function createComputerRuntime({app,locale=()=> 'zh-CN'}){
  async function observeBrowser(win){if(win.webContents.isLoadingMainFrame())await new Promise((resolve,reject)=>{const done=()=>{clearTimeout(timer);win.webContents.removeListener('did-stop-loading',done);resolve();};const timer=setTimeout(()=>{win.webContents.removeListener('did-stop-loading',done);reject(Object.assign(Error('COMPUTER_NATIVE_FAILED'),{code:'COMPUTER_NATIVE_FAILED'}));},12000);win.webContents.once('did-stop-loading',done);});const observation=await win.webContents.executeJavaScriptInIsolatedWorld(1004,[{code:'('+browserDocument.toString()+')()'}],false);const shot=await win.webContents.capturePage();return {...observation,image:shot.resize({width:1100}).toDataURL()};}
  return {
   onDisconnect(callback){disconnected=callback;},
-  async status(){if(process.platform!=='darwin')return {available:false};return {available:true,...await native({action:'status'})};},
+  async status(){
+   if(closed)return {available:false,browserAvailable:false,nativeAvailable:false};
+   // The isolated Electron browser does not need a native controller or OS permissions.
+   const capabilities={available:true,browserAvailable:true,nativeAvailable:false,platform};
+   if(platform!=='darwin')return {...capabilities,nativeReason:'COMPUTER_NATIVE_UNSUPPORTED'};
+   try{return {...await native({action:'status'}),...capabilities,nativeAvailable:true};}
+   catch{return {...capabilities,nativeReason:'COMPUTER_NATIVE_UNAVAILABLE'};}
+  },
   async apps(){return native({action:'apps'});},
-  async permission(kind){if(kind==='accessibility')return native({action:'requestAccessibility'});if(kind==='screen'){await shell.openExternal('x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture');return {ok:true};}fail('COMPUTER_INVALID_INPUT');},
+  async permission(kind){if(platform!=='darwin')fail('COMPUTER_NATIVE_UNSUPPORTED');if(kind==='accessibility')return native({action:'requestAccessibility'});if(kind==='screen'){await shell.openExternal('x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture');return {ok:true};}fail('COMPUTER_INVALID_INPUT');},
   async execute(id,target,input,{signal}={}){
-   if(signal?.aborted)fail('COMPUTER_STOPPED');
+   if(closed||signal?.aborted)fail('COMPUTER_STOPPED');
+   if(!['browser','app'].includes(target?.kind))fail('COMPUTER_INVALID_INPUT');
    if(target.kind==='browser'){
     const win=await browser(id);if(signal?.aborted)fail('COMPUTER_STOPPED');
     const abort=()=>win.webContents.stop();signal?.addEventListener('abort',abort,{once:true});

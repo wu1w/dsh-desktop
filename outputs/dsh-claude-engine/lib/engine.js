@@ -6,6 +6,7 @@ import { homedir } from 'node:os';
 import { readFileSync } from 'node:fs';
 import { FILE_TOOLS, WRITES, checkTool, childEnvironment, canonical, isInside } from './policy.js';
 import { AssistantBlocks } from './assistant-blocks.js';
+import {resolveClaudeBinary} from './cli-binary.js';
 
 const messages=Object.fromEntries(['en','zh-CN'].map(locale=>[locale,JSON.parse(readFileSync(new URL(`../locale/${locale}.json`,import.meta.url),'utf8'))]));
 const textOf=content=>typeof content==='string'?content:(content??[]).map(block=>block.text??'').join('\n');
@@ -39,7 +40,7 @@ export class ClaudeCodeEngine extends EventEmitter {
       const resolved=await canonical(this.configDir);
       for(const unsafe of [path.join(homedir(),'.claude'),path.join(homedir(),'.codex'),path.join(homedir(),'.dsh')]) if(isInside(resolved,await canonical(unsafe))||isInside(await canonical(this.dataDir),await canonical(unsafe)))throw this._error('UNSAFE_DATA_DIR','path_denied');
       await mkdir(this.configDir,{recursive:true,mode:0o700});
-      if(!this.options.query){if(!(await stat(this.binary)).isFile())throw this._error('BINARY_UNAVAILABLE','failed');this.querySDK=(await import('@anthropic-ai/claude-agent-sdk')).query;}
+      if(!this.options.query){this.binary=resolveClaudeBinary({binary:this.options.claudeBinary??this.options.binary,appRoot:this.options.appRoot,env:this.options.baseEnv??process.env});this.querySDK=(await import('@anthropic-ai/claude-agent-sdk')).query;}
       if(!this.loaded){try{const saved=JSON.parse(await readFile(path.join(this.dataDir,'sessions.json'),'utf8'));if(saved.version!==1||!Array.isArray(saved.sessions))throw new Error('SCHEMA');for(const row of saved.sessions){if(!row.sessionId||!row.threadId||!row.cwd||!Array.isArray(row.turns)||!Array.isArray(row.queue))throw new Error('SCHEMA');for(const turn of row.turns)if(turn.status==='inProgress')turn.status='interrupted';row.queue=row.queue.filter(entry=>!row.turns.some(turn=>turn.queuedSubmissionId===entry.id));for(const entry of row.queue)if(['running','starting'].includes(entry.status))entry.status='queued';this.rows.set(row.sessionId,row);}}catch(error){if(error.code!=='ENOENT')throw this._error('PERSIST_FAILED','persist');}this.loaded=true;}
       if(this.disposed||this.disposing)throw this._error('DISPOSED','disposed');this._ready=true;return this.status();
     })().finally(()=>{this.starting=null;});return this.starting;

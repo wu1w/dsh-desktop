@@ -11,6 +11,7 @@ export const channelErrors={
   CHANNEL_BUSY:['通道仍有执行或投递正在处理，请稍后重试。','The channel is processing work or delivery. Try again shortly.'],
   CHANNEL_OFFLINE:['通道尚未连接。','The channel is offline.'],
   CHANNEL_CONNECTION_FAILED:['平台连接失败，正在等待重试。请检查账号与平台权限。','Connection failed. Retrying; check the account and platform permissions.'],
+  CHANNEL_RUNTIME_MISSING:['通道运行时缺失或不可执行，已暂停自动重试。请重新安装完整应用；源码运行请准备通道运行时并重新构建，再点击重试。','The channel runtime is missing or not executable. Automatic retries are paused. Reinstall the complete app; for a source build, prepare the channel runtime and rebuild, then retry.'],
   CHANNEL_RUNTIME_FAILED:['通道运行失败，请检查配置后重连。','The channel runtime failed. Check configuration and reconnect.'],
   CHANNEL_RUNTIME_TIMEOUT:['通道响应超时。','The channel did not respond in time.'],
   CHANNEL_PROCESS_EXITED:['通道进程已退出，正在恢复。','The channel process exited and is recovering.'],
@@ -27,7 +28,6 @@ export const channelErrors={
   CHANNEL_STOP_UNCONFIRMED:['尚未确认通道进程或任务停止，请稍后重试。','The channel process or task has not confirmed it stopped. Retry shortly.'],
   CHANNEL_QR_FAILED:['二维码未能获取。请检查网络后重试，或切换手动配置。','Could not obtain a QR code. Check your connection, retry, or use manual setup.'],
   CHANNEL_QR_REQUIRED:['请先扫码连接微信。','Scan the QR code to connect WeChat first.'],
-  CHANNEL_RUNTIME_MISSING:['通道运行文件缺失，请重新安装完整应用。','Channel runtime files are missing. Reinstall the complete app.'],
   CHANNEL_NOT_FOUND:['通道记录不存在。','The channel record was not found.'],
 };
 export const channelLocales={

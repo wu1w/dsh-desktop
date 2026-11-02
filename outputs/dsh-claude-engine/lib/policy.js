@@ -26,6 +26,7 @@ export async function checkTool({name,input,cwd,configDir,dataDir,sandbox}) {
 
 export function childEnvironment({baseEnv=process.env,configDir,key,model,baseUrl}) {
   const env={};
-  for(const name of ['PATH','HOME','USER','LOGNAME','TMPDIR','LANG','LC_ALL','SHELL','TERM','SystemRoot']) if(baseEnv[name]) env[name]=baseEnv[name];
+  const allowed=new Set(['PATH','HOME','USER','LOGNAME','TMPDIR','LANG','LC_ALL','SHELL','TERM','SYSTEMROOT','USERPROFILE','HOMEDRIVE','HOMEPATH','APPDATA','LOCALAPPDATA','TEMP','TMP','COMSPEC','PATHEXT']);
+  for(const [name,value] of Object.entries(baseEnv)){const upper=name.toUpperCase();if(allowed.has(upper)&&typeof value==='string')env[upper==='SYSTEMROOT'?'SystemRoot':upper==='COMSPEC'?'ComSpec':upper]=value;}
   return {...env,CLAUDE_CONFIG_DIR:configDir,ANTHROPIC_BASE_URL:baseUrl??'https://opencode.ai/inference/go/anthropic',ANTHROPIC_AUTH_TOKEN:key,ANTHROPIC_DEFAULT_OPUS_MODEL:model,ANTHROPIC_DEFAULT_SONNET_MODEL:model,ANTHROPIC_DEFAULT_HAIKU_MODEL:model,CLAUDE_CODE_SUBAGENT_MODEL:model,CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS:'1',CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC:'1',DISABLE_TELEMETRY:'1',DISABLE_ERROR_REPORTING:'1',CLAUDE_AGENT_SDK_CLIENT_APP:'dsh-claude-engine/0.1.0'};
 }

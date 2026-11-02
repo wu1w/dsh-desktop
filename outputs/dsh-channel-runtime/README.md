@@ -10,7 +10,7 @@ The Feishu, QQ, WeChat, DingTalk and WeCom adapters, message types, splitting he
 
 ## Runtime and isolation
 
-The macOS arm64 package includes a relocatable CPython 3.12.14 distribution and hash-pinned dependencies from `requirements.lock`. No system Python or existing Hermes installation is required. Each enabled platform runs in its own Python process using `-I -B`. Its home is DSH's independent `channels/accounts/<platform>` directory. Startup credentials cross a private pipe; public API snapshots omit secrets and tokens. State files use owner-only permissions; credentials are not encrypted at rest.
+Native macOS and Windows x64 packages include a relocatable CPython 3.12.14 distribution and hash-pinned dependencies from `requirements.lock`. No system Python or existing Hermes installation is required. Each enabled platform runs in its own Python process using `-I -B`. Its home is DSH's independent `channels/accounts/<platform>` directory. Startup credentials cross a private pipe; public API snapshots omit secrets and tokens. State files use owner-only permissions; credentials are not encrypted at rest.
 
 `bridge.py` accepts bounded JSON lines on stdin and writes JSON lines on stdout. Vendor logs are suppressed, and stderr is drained without persistence. DSH inherits the current proxy environment and never changes system routes.
 
@@ -48,5 +48,7 @@ From the workspace root:
 outputs/dsh-channel-runtime/python/runtime/bin/python3 -I -B outputs/dsh-channel-runtime/tests/test_adapters.py
 node --test outputs/dsh-codex-client/test/channels.test.mjs
 ```
+
+Prepare with `npm run prepare:channels --prefix outputs/dsh-codex-client` on the target OS. Windows uses `python/runtime/python.exe`; macOS uses `python/runtime/bin/python3`. The Windows worker keeps private USERPROFILE/APPDATA/TEMP directories and the Windows system DLL search directories, without inheriting model credentials or PYTHONPATH. Preparation installs only hash-checked binary distributions and preserves the previous runtime on failure.
 
 Build and package through the client scripts. Package verification additionally imports all five adapters using the packaged interpreter and verifies upstream hashes.

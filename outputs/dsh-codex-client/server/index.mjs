@@ -68,6 +68,7 @@ Object.assign(codes,{
   NO_ACTIVE_TURN:['当前回答已经结束，消息已保留，可立即发送。','The current response ended. Your message is saved and can be sent now.'],
   ENGINE_MISMATCH:['此聊天属于另一个执行引擎，请先在设置中切换引擎。','This chat belongs to another engine. Select that engine in Settings.'],
   ENGINE_PLUGIN_DISABLED:['所选执行引擎插件尚未启用。','Enable the selected engine plugin first.'],
+  CLAUDE_CLI_NOT_FOUND:['找不到此平台的 Claude CLI。请重新安装完整应用，或安装原生 Claude CLI 后重启。','Claude CLI for this platform was not found. Reinstall the complete app, or install the native Claude CLI and restart.'],
   ENGINE_NOT_INSTALLED:['此引擎尚未安装完成，请先使用 Codex 引擎。','This engine is not fully installed. Use the Codex engine for now.'],
   PLUGIN_UNKNOWN:['找不到此插件。','Plugin not found.'],PLUGIN_START_FAILED:['插件启动失败，可停用后重试。','The plugin could not start. Disable it and try again.'],INVALID_PLUGIN:['插件格式无效，需要有效的 dsh-plugin.json 和入口文件。','Invalid plugin. A valid dsh-plugin.json and entry file are required.'],PLUGIN_CONFLICT:['此插件已安装或与现有插件冲突。','This plugin is already installed or conflicts with another plugin.'],BUILTIN_PLUGIN:['内置插件可停用，不能删除。','Built-in plugins can be disabled but cannot be removed.'],HTTP_ENV_UNSUPPORTED:['HTTP 服务请使用登录授权；环境变量仅适用于本地命令服务。','Use sign-in for HTTP services. Environment variables apply to local commands.'],
   MCP_APPLY_FAILED:['MCP 配置已保存，但引擎未能应用，请检查配置后重试。','MCP configuration was saved but could not be applied. Check it and retry.'],SKILL_LIST_FAILED:['无法读取技能目录，请重试或查看引擎状态。','Could not read the skill catalog. Retry or check the engine.']
@@ -89,7 +90,7 @@ function publicError(error, locale = 'zh-CN') { const code = error.code ?? error
 function fail(code) { throw new Error(code); }
 
 Object.assign(codes,computerErrors,modelProviderErrors);
-export async function startHost({ dataDir, port = 0, autoStart = true, binary, engineOptions = {}, recoveryOptions = {}, supervisorOptions = {}, channelOptions = {}, instructionOptions = {}, computerRuntime = null } = {}) {
+export async function startHost({ dataDir, port = 0, autoStart = true, binary, engineOptions = {}, recoveryOptions = {}, supervisorOptions = {}, channelOptions = {}, instructionOptions = {}, computerRuntime = null, resolveLegacyKey = resolveGoKey } = {}) {
   dataDir=await assertIndependentDataDirectory(dataDir);
   await mkdir(dataDir, { recursive: true, mode: 0o700 });
   dataDir=await realpath(dataDir);let lockLost=false;let lockLossError;let onLockLost=()=>{};let context;let closing;
@@ -129,11 +130,10 @@ export async function startHost({ dataDir, port = 0, autoStart = true, binary, e
   const publicState = () => ({ recovery:clientRecovery,startupBlocked,activities:plugins?.activities()??[],plugins:plugins?.list()??[],engineProviders:engineProviders(),features:[...(plugins?.features?.keys()??[])],selectedEngine,pendingEngine:state.preferences.pendingEngine??null,switchingEngine:switching,appearance:appearanceState(),pluginChange:plugins?.settings.lastChange??null,logs,notifications: state.notifications ?? [], models: modelProviders?.models(selectedEngine)??state.models??[], modelProviders:modelProviders?.public()??null, preferences: state.preferences ?? {}, projects: state.projects, sessions: state.sessions.map(session => ({ ...session,engineId:session.engineId??'codex', running: engine?.activeTurns.has(session.id) ?? false,activeTurnId:engine?.activeTurns.get(session.id)?.turnId??null })), engine: { id:selectedEngine,provider:engine?.provider??'opencode_go',capabilities:plugins?.engines.get(selectedEngine)?.capabilities??{},state: engine?.ready ? 'ready' : 'stopped', recovery:supervisor?.snapshot()??null, model: engine?.model, error: engineFailure } });
   const broadcast = value => clients.broadcast(value);
   const broadcastState = () => broadcast({ type: 'state', state: publicState() });
-  modelProviders=await new ModelProviders({dataDir,legacyModels:state.models,resolveLegacyKey:resolveGoKey,isBusy:()=>switching||!!engine?.activeTurns.size||state.sessions.some(s=>['running','waiting','uncertain'].includes(s.runRecovery?.status)),isUsed:(id,model)=>state.sessions.some(s=>modelProviders.models().some(m=>m.providerId===id&&(!model||m.modelId===model)&&m.id===s.model)),onChange:()=>{state.models=modelProviders.models();broadcastState();}}).load();
+  modelProviders=await new ModelProviders({dataDir,legacyModels:state.models,resolveLegacyKey,isBusy:()=>switching||!!engine?.activeTurns.size||state.sessions.some(s=>['running','waiting','uncertain'].includes(s.runRecovery?.status)),isUsed:(id,model)=>state.sessions.some(s=>modelProviders.models().some(m=>m.providerId===id&&(!model||m.modelId===model)&&m.id===s.model)),onChange:()=>{state.models=modelProviders.models();broadcastState();}}).load();
   // 持久化的 models 可能是旧列表（换过 provider 或重建过索引），启动时以当前 provider 为准，
   // 否则新建会话会因模型不在列表里被判 INVALID_REQUEST。
   state.models=modelProviders.models(selectedEngine);
-  state.models=modelProviders.models();
   const resolveModel=(selection,engineId=selectedEngine)=>{const connection=modelProviders.resolve(selection,engineId);return {...connection,provider:connection.provider==='opencode_go'?'opencode_go':'dsh_'+connection.provider,baseUrl:`http://127.0.0.1:${address.port}/model-api/${connection.provider}/${connection.api}`,bearer:modelBearer,models:modelProviders.state.providers.find(p=>p.id===connection.provider).models};};
   const getProject = id => state.projects.find(p => p.id === id) ?? fail('NOT_FOUND');
   const sessionWorkspaces=new SessionWorkspaces(dataDir,getProject);
@@ -172,7 +172,8 @@ export async function startHost({ dataDir, port = 0, autoStart = true, binary, e
     if(!inputs.length)fail('INVALID_REQUEST');return inputs;
   }
   const sendTranscript = session => transcripts.has(session.id)&&broadcast({ type: 'session', sessionId: session.id, items: transcripts.get(session.id) ?? [], running: engine?.activeTurns.has(session.id) ?? false });
-  taskRecovery=new TaskRecovery({state,save,getEngine:()=>engine,getSelectedEngine:()=>selectedEngine,canRun:()=>restartWanted&&!switching&&!closing&&!lockLost&&!clientRecovery&&!startupBlocked&&plugins?.features.has('feature-chat'),onChange:broadcastState,onError:code=>broadcast({type:'error',code,message:publicError({code},state.preferences.locale)}),...recoveryOptions});
+  const preflightModel=(model,input=[])=>modelProviders.preflight(model,selectedEngine,{input});
+  taskRecovery=new TaskRecovery({state,save,preflight:(session,input)=>preflightModel(session.model??'deepseek-v4.1-flash',input??[]),getEngine:()=>engine,getSelectedEngine:()=>selectedEngine,canRun:()=>restartWanted&&!switching&&!closing&&!lockLost&&!clientRecovery&&!startupBlocked&&plugins?.features.has('feature-chat'),onChange:broadcastState,onError:code=>broadcast({type:'error',code,message:publicError({code},state.preferences.locale)}),...recoveryOptions});
   const alterEngine = (enable,{automatic=false}={}) => {
     if(!automatic){restartWanted=enable;supervisor?.cancel();}
 
@@ -180,7 +181,7 @@ export async function startHost({ dataDir, port = 0, autoStart = true, binary, e
       if(enable&&(closing||lockLost||!restartWanted))return;
       if(!enable){computer.stopAll();await taskRecovery.pause('engine_disabled');}
       if (enable && engine?.ready) return;
-      if (engineFiber) { approvals.clear(engine); await engineFiber.dispose(); engineFiber = null; engine = null; for (const s of state.sessions) sendTranscript(s); }
+      if (engineFiber) { const disposing=engineFiber;approvals.clear(engine);await disposing.dispose();engineFiber=null;engine=null;for (const s of state.sessions) sendTranscript(s); }
       engineFailure = '';
       if (enable) {
         try {
@@ -196,7 +197,7 @@ export async function startHost({ dataDir, port = 0, autoStart = true, binary, e
             if(engine!==boundEngine)return;
             const session = state.sessions.find(s => s.threadId === note.params?.threadId);
             if (!session) return;
-            void taskRecovery.observe(session,note).catch(()=>{});
+            void taskRecovery.observe(session,note,boundEngine).catch(()=>{});
             if(note.method==='turn/started'){session.startedAt=new Date().toISOString();session.completedAt=null;void save().catch(()=>{});broadcastState();}
             if(note.method==='thread/queue/changed')void sendQueue(session);
             const p = getSessionWorkspace(session);
@@ -263,49 +264,43 @@ export async function startHost({ dataDir, port = 0, autoStart = true, binary, e
     if(id===selectedEngine){if(!engine?.ready)await alterEngine(true);return;}
     // No input can be admitted while a complete handoff is being prepared.
     if(engine?.activeTurns.size||sessionsBusy()||plugins.activities().some(a=>a.count>0&&!['terminal','command'].includes(a.kind)&&!a.id.endsWith('-connection')))fail('ENGINE_BUSY');
-    if(!engine?.ready&&state.sessions.some(s=>(s.engineId??'codex')===selectedEngine))fail('ENGINE_DISABLED');
-    for(const session of state.sessions.filter(s=>(s.engineId??'codex')===selectedEngine))modelProviders.resolve(session.model??'deepseek-v4.1-flash',id);
+    // Engine selection applies to new chats. Existing conversations retain their
+    // original engine, history, queues and model; switching never migrates them.
     switching=true;broadcastState();
-    const oldId=selectedEngine,oldPreference=state.preferences.selectedEngine,oldRows=structuredClone(state.sessions),snapshots=[],patches=[];
+    const oldId=selectedEngine,oldPreference=state.preferences.selectedEngine;
     let changed=false;
-    try{
-      for(const session of state.sessions.filter(s=>(s.engineId??'codex')===oldId)){
-        const entries=await exportEntries(engine,session.id);
-        if(entries.some(e=>e.item?.type==='userMessage'&&e.item.content?.some(c=>['image','localImage'].includes(c.type))))fail('CONTEXT_IMAGE_UNSUPPORTED');
-        const queue=await readQueueForHandoff(session);
-        const instructions=await sessionInstructions(getSessionWorkspace(session).path);
-        const turnState=session.runRecovery?.turnId?await engine.readTurnState(session.id,session.runRecovery.turnId):null;
-        snapshots.push({session,entries,queue,instructions,turnState,context:contextText(entries,instructions)});
-      }
-      if(engine?.activeTurns.size)fail('ENGINE_BUSY');
+    try {
       await alterEngine(false);changed=true;selectedEngine=id;await alterEngine(true);
-      for(const item of snapshots){
-        const nativeId=randomUUID(),session=item.session;
-        const mapped=await engine.nativeEngine.createSession(nativeId,{cwd:getSessionWorkspace(session).path,model:session.model,sharedContext:item.context});
-        await sharedContext.write(nativeId,{entries:item.entries,instructions:item.instructions,turnState:item.turnState,fromEngine:oldId,fromThread:session.threadId,createdAt:new Date().toISOString(),digest:contextDigest(item.entries)});
-        if(session.title)await engine.nativeEngine.renameSession(nativeId,session.title);
-        if(session.archived)await engine.nativeEngine.archiveSession(nativeId);
-        patches.push([session,{engineId:id,engineSessionId:nativeId,contextRef:nativeId,threadId:mapped.threadId,recoveredQueue:item.queue.map(q=>({...q,recovered:true}))}]);
-      }
-      for(const [session,patch] of patches)Object.assign(session,patch);
-      state.preferences.selectedEngine=id;state.preferences.pendingEngine=null;await save();
+      state.preferences.selectedEngine=id;state.preferences.pendingEngine=null;
+      await save();
       transcripts.clear();history.windows.clear();history.cacheBytes=0;
-    }catch(error){
-      if(changed){
-        await alterEngine(false).catch(()=>{});
-        selectedEngine=oldId;state.preferences.selectedEngine=oldPreference??oldId;
-        state.sessions.splice(0,state.sessions.length,...oldRows);
-        await save();await alterEngine(true);
-      }
+    } catch(error) {
+      if(changed){await alterEngine(false).catch(()=>{});selectedEngine=oldId;state.preferences.selectedEngine=oldPreference??oldId;await save();await alterEngine(true);}
       throw error;
-    }finally{switching=false;broadcastState();void taskRecovery.recover();}
+    } finally {switching=false;broadcastState();void taskRecovery.recover();}
+  }
+  async function abandonTask(session) {
+    const operation=selectionChanging.then(async()=>{
+      if((session.engineId??'codex')!==selectedEngine)fail('ENGINE_MISMATCH');
+      if(session.runRecovery?.status!=='uncertain')fail('TASK_NOT_RESUMABLE');
+      if([...engine?.activeTurns.keys()??[]].some(id=>id!==session.id)||state.sessions.some(s=>s.id!==session.id&&(s.engineId??'codex')===selectedEngine&&['running','waiting'].includes(s.runRecovery?.status)))fail('ENGINE_BUSY');
+      switching=true;broadcastState();
+      try {
+        // Disposal must finish before releasing an unknown dispatch. No new
+        // submissions or automatic recovery are admitted across this boundary.
+        await alterEngine(false);
+        await taskRecovery.abandon(session);
+        return {ok:true,engineStopped:true,outcome:'unknown'};
+      } finally {switching=false;broadcastState();}
+    });
+    selectionChanging=operation.catch(()=>{});return operation;
   }
   async function readQueueForHandoff(session){
     const data=[];let cursor;const seen=new Set();
     do{const page=await engine.queueRequest(session.id,'list',{cursor,limit:100});data.push(...page.data);cursor=page.nextCursor;if(cursor&&seen.has(cursor))fail('CONTEXT_INVALID');seen.add(cursor);}while(cursor);
     return [...data,...(session.recoveredQueue??[])];
   }
-  plugins=new PluginHost({context,dataDir,services:{computer,appRoot:root,dataDir,state,save,channelOptions,taskRecovery,broadcastState,getProject,getSession,getSessionWorkspace,ensureSessionWorkspace,requireEngine,readTranscript,readHistory,readQueue,sendQueue,turnInputs,transcripts,commands,integrations,approvals,runQueueMutation,getSelectedEngine:()=>selectedEngine},builtins:['feature-computer','engine-codex','engine-claude-code','engine-dsh-native','appearance-codex','feature-projects','feature-chat','feature-files','feature-terminal','feature-integrations','feature-deepseek-profile','feature-git','feature-automations','feature-images','feature-mcp-forms','channel-feishu','channel-qq','channel-weixin','channel-dingtalk','channel-wecom'].map(name=>path.join(root,'server/plugins',name+'.mjs')),onChange:broadcastState,beforeUpdate:async manifest=>{
+  plugins=new PluginHost({context,dataDir,services:{preflightModel,abandonTask,computer,appRoot:root,dataDir,state,save,channelOptions,taskRecovery,broadcastState,getProject,getSession,getSessionWorkspace,ensureSessionWorkspace,requireEngine,readTranscript,readHistory,readQueue,sendQueue,turnInputs,transcripts,commands,integrations,approvals,runQueueMutation,getSelectedEngine:()=>selectedEngine},builtins:['feature-computer','engine-codex','engine-claude-code','engine-dsh-native','appearance-codex','feature-projects','feature-chat','feature-files','feature-terminal','feature-integrations','feature-deepseek-profile','feature-git','feature-automations','feature-images','feature-mcp-forms','channel-feishu','channel-qq','channel-weixin','channel-dingtalk','channel-wecom'].map(name=>path.join(root,'server/plugins',name+'.mjs')),onChange:broadcastState,beforeUpdate:async manifest=>{
     const coreProvider=plugins.engines.get(selectedEngine)?.pluginId===manifest.id||plugins.features.get('feature-chat')?.pluginId===manifest.id||plugins.features.get('feature-integrations')?.pluginId===manifest.id;
     if(coreProvider&&engine?.ready)fail('PLUGIN_ENGINE_MUST_STOP');
     if((manifest.type==='engine'||coreProvider)&&selectionBusy())fail('PLUGIN_BUSY');
@@ -406,6 +401,7 @@ export async function startHost({ dataDir, port = 0, autoStart = true, binary, e
         if(segments[0]==='model-providers'){
           if(request.method==='GET'){json(modelProviders.public());return;}
           if(request.method!=='POST')fail('INVALID_REQUEST');
+          if(segments[1]==='preflight'){json(await preflightModel(body.model,body.input??[]));return;}
           if(segments[1]==='discover'){json(await modelProviders.discover(body));return;}
           json(await modelProviders.mutate(body,segments[1]==='remove'));return;
         }
@@ -445,7 +441,7 @@ export async function startHost({ dataDir, port = 0, autoStart = true, binary, e
       if(closing)response.setHeader('Connection','close');
       const code = error.code ?? error.message;
       response.writeHead(code === 'FORBIDDEN' ? 403 : code === 'NOT_FOUND' ? 404 : code === 'FILE_CHANGED' || code === 'TURN_IN_FLIGHT' ? 409 : 400, { 'content-type':'application/json; charset=utf-8','cache-control':'no-store' });
-      response.end(JSON.stringify({code:typeof code === 'string'&&/^[A-Z][A-Z0-9_]{0,79}$/.test(code)?code:'INTERNAL',message:publicError(error,locale)}));
+      response.end(JSON.stringify({code:typeof code === 'string'&&/^[A-Z][A-Z0-9_]{0,79}$/.test(code)?code:'INTERNAL',message:publicError(error,locale),...(error.action==='open-model-settings'?{action:error.action}:{}),...(typeof error.providerId==='string'&&/^[-a-z0-9_]{1,40}$/.test(error.providerId)?{providerId:error.providerId}:{})}));
     }
   });
   await new Promise((resolve,reject) => { server.once('error',reject); server.listen(port,'127.0.0.1',resolve); }); address=server.address();

@@ -1,4 +1,5 @@
 export const localToolErrors={
+  COMMAND_START_FAILED:['项目命令未能启动，请检查 Windows PowerShell、终端组件和系统策略。','The project command could not start. Check Windows PowerShell, terminal components and system policy.'],
   AUTOMATION_STOP_FAILED:['尚未确认本地任务已结束，插件和任务记录已保留。请稍后重试停用。','The local task has not confirmed its end. The plugin and task records were kept. Retry stopping shortly.'],
   COMMAND_STOP_FAILED:['尚未确认项目命令及其进程组已退出，插件仍保留运行记录。请稍后重试停用。','The project command and its process group have not confirmed their exit. The plugin kept their activity records. Retry stopping shortly.'],
   PTY_CLOSED:['终端已停止接收新操作。请完成停用后重新启用插件。','The terminal service is not accepting new operations. Finish stopping it, then re-enable the plugin.'],

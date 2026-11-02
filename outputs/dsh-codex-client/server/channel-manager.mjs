@@ -11,7 +11,7 @@ const commands=new Set(['/status','/stop','/resume','/new']);
 const knownCode=error=>String(error?.code??'').startsWith('ERR_SQLITE')?'CHANNEL_STORAGE_FAILED':/^CHANNEL_[A-Z_]+$/.test(error?.code)?error.code:'CHANNEL_RUNTIME_FAILED';
 export class ChannelManager{
   constructor({host,platform,Process=ChannelProcess,tickMs=750}){
-    Object.assign(this,{host,platform,Process,tickMs});this.store=new ChannelStore({dataDir:host.dataDir,platform});this.closed=false;this.stopping=false;this.worker=null;this.state='idle';this.error=null;this.attempt=0;this.nextConnect=0;this.serial=Promise.resolve();this.operations=new Set();this.pendingPeers=new Map();this.qrSession=null;
+    Object.assign(this,{host,platform,Process,tickMs});this.store=new ChannelStore({dataDir:host.dataDir,platform});this.closed=false;this.stopping=false;this.worker=null;this.state='idle';this.error=null;this.attempt=0;this.nextConnect=0;this.retryBlocked=false;this.serial=Promise.resolve();this.operations=new Set();this.pendingPeers=new Map();this.qrSession=null;
     this.home=path.join(host.dataDir,'channels','accounts',platform);
     this.runtimeRoot=path.join(host.appRoot,'channel-runtime');
   }
@@ -20,7 +20,7 @@ export class ChannelManager{
   snapshot(){
     const c=this.config;
     return {platform:this.platform,configured:!!c,config:c?{projectId:c.projectId,engineId:this.host.getSelectedEngine(),model:c.model,permission:c.permission,locale:c.locale,appId:c.appId??'',allowedUsers:c.allowedUsers,allowedGroups:c.allowedGroups,enabled:c.enabled,hasSecret:!!c.secret,hasToken:!!c.token,accountId:c.accountId??'',domain:c.domain??'feishu'}:null,
-      pairing:[...this.pendingPeers.values()],runtime:{state:this.state,error:this.error,nextRetryAt:this.nextConnect?new Date(this.nextConnect).toISOString():null},counts:this.store.counts(),deliveries:this.store.pending(),executions:this.store.rows(['running','paused','unknown'],20).map(row=>({id:row.id,status:row.status,sessionId:row.session_id,error:row.error}))};
+      pairing:[...this.pendingPeers.values()],runtime:{state:this.state,error:this.error,retryBlocked:this.retryBlocked,nextRetryAt:this.nextConnect?new Date(this.nextConnect).toISOString():null},counts:this.store.counts(),deliveries:this.store.pending(),executions:this.store.rows(['running','paused','unknown'],20).map(row=>({id:row.id,status:row.status,sessionId:row.session_id,error:row.error}))};
   }
   sequence(work){if(this.closed||this.stopping)return Promise.reject(channelFault('CHANNEL_STOPPED'));const result=this.serial.then(()=>{if(this.stopping||this.closed)throw channelFault('CHANNEL_STOPPED');return work();});this.serial=result.catch(()=>{});return result;}
   validateConfig(input){
@@ -51,8 +51,8 @@ export class ChannelManager{
       else if(connect){this.state='connected';this.error=null;this.attempt=0;this.nextConnect=0;}
     }catch(error){if(this.worker===worker)await this.stopWorker();if(error.code==='ENOENT')this.scheduleReconnect('CHANNEL_RUNTIME_MISSING');else this.scheduleReconnect(knownCode(error));throw error;}
   }
-  scheduleReconnect(code){this.state='retrying';this.error=code;this.nextConnect=Date.now()+Math.min(300000,5000*2**Math.min(this.attempt++,8));}
-  async connect(){return this.sequence(async()=>{const c=this.config;if(!c||this.platform!=='weixin'&&(!c.secret||!idText(c.appId)))throw channelFault('CHANNEL_INVALID_CONFIG');if(this.platform==='weixin'&&!c.token)throw channelFault('CHANNEL_QR_REQUIRED');if(c.projectId!=null)this.host.getProject(c.projectId);this.store.saveConfig({...c,enabled:true});this.config={...c,enabled:true};this.nextConnect=0;this.state='connecting';await this.createWorker();return this.snapshot();});}
+  scheduleReconnect(code){if(code==='CHANNEL_RUNTIME_MISSING'){this.state='error';this.error=code;this.retryBlocked=true;this.nextConnect=0;return;}if(this.retryBlocked)return;this.state='retrying';this.error=code;this.nextConnect=Date.now()+Math.min(300000,5000*2**Math.min(this.attempt++,8));}
+  async connect(){return this.sequence(async()=>{const c=this.config;if(!c||this.platform!=='weixin'&&(!c.secret||!idText(c.appId)))throw channelFault('CHANNEL_INVALID_CONFIG');if(this.platform==='weixin'&&!c.token)throw channelFault('CHANNEL_QR_REQUIRED');if(c.projectId!=null)this.host.getProject(c.projectId);this.store.saveConfig({...c,enabled:true});this.config={...c,enabled:true};this.nextConnect=0;this.retryBlocked=false;this.state='connecting';await this.createWorker();return this.snapshot();});}
   async stopWorker(){const worker=this.worker;if(!worker)return;await worker.stop();if(this.worker===worker)this.worker=null;}
   async disconnect(){return this.sequence(async()=>{if(this.config){this.config={...this.config,enabled:false};this.store.saveConfig(this.config);}this.nextConnect=0;this.qrSession=null;this.pendingPeers.clear();await this.stopWorker();this.state='disabled';this.error=null;return this.snapshot();});}
   async qrStart(input){return this.sequence(async()=>{
@@ -154,8 +154,8 @@ export class ChannelManager{
     if(this.qrSession&&Date.now()>=this.qrSession.expiresAt)await this.qrCancel(this.qrSession.id);
     if(!this.config?.enabled)return;
     if(!this.lastPrune||Date.now()-this.lastPrune>3600000){this.store.prune();this.lastPrune=Date.now();}
-    if(!this.worker&&Date.now()>=this.nextConnect){this.state='connecting';await this.sequence(()=>this.createWorker()).catch(()=>{});}
-    if(this.closed||this.stopping||!this.config?.enabled)return;
+    if(!this.worker&&!this.retryBlocked&&Date.now()>=this.nextConnect){this.state='connecting';await this.sequence(()=>this.createWorker()).catch(()=>{});}
+    if(this.closed||this.stopping||!this.config?.enabled||this.retryBlocked)return;
     if(this.worker&&(!this.lastHealth||Date.now()-this.lastHealth>10000)){
       this.lastHealth=Date.now();try{const health=await this.worker.request('status');if(health.fatal){if(['CHANNEL_QR_REQUIRED','CHANNEL_CONNECTION_CONFLICT'].includes(health.fatalCode)){this.config={...this.config,enabled:false};this.store.saveConfig(this.config);await this.stopWorker();this.state='error';this.error=health.fatalCode;this.nextConnect=0;return;}await this.stopWorker();this.scheduleReconnect('CHANNEL_CONNECTION_FAILED');}else if(!health.connected){this.state='retrying';this.offlineSince??=Date.now();if(Date.now()-this.offlineSince>=30000){await this.stopWorker();this.offlineSince=null;this.scheduleReconnect('CHANNEL_CONNECTION_FAILED');}}else{this.state='connected';this.offlineSince=null;if(health.rejected)this.error='CHANNEL_INBOUND_REJECTED';}}catch{await this.stopWorker();this.scheduleReconnect('CHANNEL_PROCESS_EXITED');}
     }

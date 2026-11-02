@@ -1,4 +1,5 @@
 import { spawn } from 'node:child_process';
+import {windowsEnvironment,windowsShell,windowsCommandArgs,windowsJobCommand,killWindowsProcessTree} from './windows-process.mjs';
 
 const executions = new WeakMap();
 const delay = milliseconds => new Promise(resolve => setTimeout(resolve, milliseconds));
@@ -29,7 +30,9 @@ export function stopProjectCommand(child) {
     try {
       // The leader may have exited while background descendants redirected their
       // pipes. Its close event alone does not mean that the process group is gone.
-      if (groupExists(child)) {
+      if(execution.platform==='win32'){
+        if(!execution.doneSettled){try{await execution.killTree(child.pid,{env:execution.environment});}catch(error){if(!execution.doneSettled)throw error;}}
+      }else if (groupExists(child)) {
         signalGroup(child, 'SIGTERM');
         if (!await waitUntil(() => !groupExists(child), execution.killGraceMs)) {
           signalGroup(child, 'SIGKILL');
@@ -58,9 +61,11 @@ export async function stopProjectCommands(commands) {
   const failure = stopped.find(result => result.status === 'rejected');
   if (failure) throw failure.reason;
 }
-export async function runProjectCommand({ command, cwd, commands, shell = process.env.SHELL || '/bin/zsh', timeoutMs = 30000, killGraceMs = 1000, maxOutputBytes = 1024 * 1024 }) {
-  const environment = Object.fromEntries(['PATH', 'HOME', 'USER', 'LANG', 'TMPDIR', 'SHELL', 'TERM'].filter(key => process.env[key]).map(key => [key, process.env[key]]));
-  const child = spawn(shell, ['-c', command], { cwd, env: environment, detached: true, stdio: ['ignore', 'pipe', 'pipe'] });
+export async function runProjectCommand({ command, cwd, commands, shell, platform=process.platform, env=process.env, spawnProcess=spawn, killTree=killWindowsProcessTree, timeoutMs = 30000, killGraceMs = 1000, maxOutputBytes = 1024 * 1024 }) {
+  shell??=platform==='win32'?windowsShell(env):env.SHELL||'/bin/zsh';
+  const environment = platform==='win32'?windowsEnvironment(env):Object.fromEntries(['PATH', 'HOME', 'USER', 'LANG', 'TMPDIR', 'SHELL', 'TERM'].filter(key => env[key]).map(key => [key, env[key]]));
+  const launch=platform==='win32'?windowsJobCommand(shell,windowsCommandArgs(shell,command),{env:environment}):{file:shell,args:['-c',command]};
+  const child = spawnProcess(launch.file,launch.args, { cwd, env: environment, detached: platform!=='win32', windowsHide:true, stdio: ['ignore', 'pipe', 'pipe'] });
   let size = 0;
   const chunks = [];
   const append = chunk => {
@@ -70,17 +75,17 @@ export async function runProjectCommand({ command, cwd, commands, shell = proces
   };
   child.stdout.on('data', append); child.stderr.on('data', append);
   const done = new Promise((resolve, reject) => {
-    child.once('error', reject);
+    child.once('error', error=>reject(platform==='win32'?Object.assign(Error('COMMAND_START_FAILED',{cause:error}),{code:'COMMAND_START_FAILED'}):error));
     child.once('close', (code, signal) => resolve({ code, signal }));
   });
   let rejectStop;
   const stopFailed = new Promise((resolve, reject) => { rejectStop = reject; });
-  const execution = { done, killGraceMs, commands, doneSettled: false, rejectStop };
+  const execution = { done, killGraceMs, commands, doneSettled: false, rejectStop,platform,environment,killTree };
   void done.then(() => { execution.doneSettled = true; }, () => { execution.doneSettled = true; });
   executions.set(child, execution); commands.add(child);
   const timeout = setTimeout(() => { void stopProjectCommand(child).catch(() => {}); }, timeoutMs);
   let failedStop = false;
-  try { return { ...await Promise.race([done, stopFailed]), output: Buffer.concat(chunks).toString('utf8') }; }
+  try { const result=await Promise.race([done,stopFailed]);const output=Buffer.concat(chunks).toString('utf8');if(platform==='win32'&&result.code===125&&output.includes('DSH_WINDOWS_JOB_FAILED'))throw Object.assign(Error('COMMAND_START_FAILED'),{code:'COMMAND_START_FAILED'});return {...result,output}; }
   catch (error) { failedStop = error.code === 'COMMAND_STOP_FAILED'; throw error; }
   finally {
     clearTimeout(timeout);

@@ -1,3 +1,7 @@
+import {denyFixtureWrites} from './fixtures/permissions.mjs';
+import {assertPrivatePermissions} from './fixtures/permissions.mjs';
+import {fixtureSymlink} from './fixtures/fs-platform.mjs';
+import {pathToFileURL} from 'node:url';
 import test from 'node:test';import assert from 'node:assert/strict';
 import {mkdtemp,realpath,writeFile,readFile,rm,stat,symlink,link,chmod,readdir,rename,mkdir}from'node:fs/promises';import os from'node:os';import path from'node:path';import {spawn}from'node:child_process';import {fileURLToPath}from'node:url';
 import {GitDraftStore}from'../server/git-drafts.mjs';
@@ -10,7 +14,7 @@ async function until(fn){for(let i=0;i<200;i++){try{const v=await fn();if(v)retu
 test('immediate input snapshot, fresh non-ABA versions and stale clear preserve independent project drafts',async()=>{
  const {dir,store,file}=await setup();try{
   assert.equal(await store.get('project'),null);assert.deepEqual(await store.clear({projectId:'project',baseVersion:null}),{cleared:false});
-  const input=value(),pending=store.save(input);input.message='mutated after call';const first=await pending;assert.equal(first.message,'commit input');assert.equal((await stat(file)).mode&0o777,0o600);
+  const input=value(),pending=store.save(input);input.message='mutated after call';const first=await pending;assert.equal(first.message,'commit input');assertPrivatePermissions(file,0o600);
   const next=await store.save(value('project',first.version,'newer'));assert.notEqual(next.version,first.version);
   await assert.rejects(store.save(value('project',first.version)),{code:'GIT_DRAFT_CHANGED'});await assert.rejects(store.clear({projectId:'project',baseVersion:first.version}),{code:'GIT_DRAFT_CHANGED'});
   const other=await store.save(value('other'));await store.clear({projectId:'project',baseVersion:next.version});assert.equal(await store.get('project'),null);assert.equal((await store.get('other')).version,other.version);
@@ -36,9 +40,9 @@ test('symlink and hardlink destinations fail closed without changing outside byt
  for(const kind of ['symlink','hardlink','parent','lock']){
   const {dir,store,file}=await setup();const outside=await setup();let active=store;try{
    await writeFile(outside.file,'outside unchanged');
-   if(kind==='symlink')await symlink(outside.file,file);if(kind==='hardlink')await link(outside.file,file);
-   if(kind==='parent'){const alias=path.join(dir,'alias');await symlink(outside.dir,alias);active=new GitDraftStore({dataDir:alias});}
-   if(kind==='lock')await symlink(outside.dir,path.join(dir,'.git-drafts.lock'));
+   if(kind==='symlink')await fixtureSymlink(outside.file,file);if(kind==='hardlink')await link(outside.file,file);
+   if(kind==='parent'){const alias=path.join(dir,'alias');await fixtureSymlink(outside.dir,alias);active=new GitDraftStore({dataDir:alias});}
+   if(kind==='lock')await fixtureSymlink(outside.dir,path.join(dir,'.git-drafts.lock'));
    await assert.rejects(active.save(value()),{code:'GIT_DRAFT_STORAGE_UNSAFE'});assert.equal(await readFile(outside.file,'utf8'),'outside unchanged');
   }finally{await active.close();await store.close();await outside.store.close();await rm(dir,{recursive:true,force:true});await rm(outside.dir,{recursive:true,force:true});}
  }
@@ -68,17 +72,17 @@ test('lost write-lock identity refuses publication and never removes another loc
  }finally{await store.close();await rm(dir,{recursive:true,force:true});}
 });
 
-test('filesystem failure retains saved data and close waits for an admitted write',{skip:process.getuid?.()===0},async()=>{
- const {dir,store,file}=await setup();try{
-  const first=await store.save(value()),bytes=await readFile(file);await chmod(dir,0o500);await assert.rejects(store.save(value('project',first.version,'lost')),{code:'GIT_DRAFT_WRITE_FAILED'});await chmod(dir,0o700);assert.deepEqual(await readFile(file),bytes);
+test('filesystem failure retains saved data and close waits for an admitted write',{skip:process.getuid?.()===0},async t=>{
+ const {dir,store,file}=await setup();let restore;try{
+  const first=await store.save(value()),bytes=await readFile(file);if(process.platform==='win32')restore=denyFixtureWrites(t,dir);else await chmod(dir,0o500);await assert.rejects(store.save(value('project',first.version,'lost')),{code:'GIT_DRAFT_WRITE_FAILED'});restore?.();restore=null;if(process.platform!=='win32')await chmod(dir,0o700);assert.deepEqual(await readFile(file),bytes);
   let release;const gate=new Promise(resolve=>release=resolve),original=store._persist.bind(store);store._persist=async(...args)=>{await gate;return original(...args);};const pending=store.save(value('project',first.version,'admitted'));let closed=false;const closing=store.close().then(()=>closed=true);await pause(20);assert.equal(closed,false);release();await pending;await closing;
   const reopened=new GitDraftStore({dataDir:dir});assert.equal((await reopened.get('project')).message,'admitted');await reopened.close();
- }finally{await chmod(dir,0o700);await store.close();await rm(dir,{recursive:true,force:true});}
+ }finally{restore?.();restore=null;if(process.platform!=='win32')await chmod(dir,0o700);await store.close();await rm(dir,{recursive:true,force:true});}
 });
 
 test('SIGKILL after acknowledged save survives with exact draft and private file',async()=>{
  const {dir,store}=await setup();let child;try{
-  const source=`import{GitDraftStore}from ${JSON.stringify(path.join(root,'server/git-drafts.mjs'))};const s=new GitDraftStore({dataDir:${JSON.stringify(dir)}});const row=await s.save(${JSON.stringify(value())});process.stdout.write(JSON.stringify(row)+'\\n');setInterval(()=>{},1000);`;
+  const source=`import{GitDraftStore}from ${JSON.stringify(pathToFileURL(path.join(root,'server/git-drafts.mjs')).href)};const s=new GitDraftStore({dataDir:${JSON.stringify(dir)}});const row=await s.save(${JSON.stringify(value())});process.stdout.write(JSON.stringify(row)+'\\n');setInterval(()=>{},1000);`;
   child=spawn(process.execPath,['--input-type=module','-e',source],{stdio:['ignore','pipe','pipe']});let stdout='';child.stdout.on('data',b=>stdout+=b.toString());const saved=await until(()=>stdout.includes('\n')?JSON.parse(stdout.trim()):null);child.kill('SIGKILL');await new Promise(resolve=>child.once('close',resolve));assert.deepEqual(await store.get('project'),saved);
  }finally{child?.kill('SIGKILL');await store.close();await rm(dir,{recursive:true,force:true});}
 });
@@ -87,7 +91,7 @@ test('two actual processes cannot both save the same base version',async()=>{
  const {dir,store}=await setup(),children=[];
  try{
   const worker=()=>{
-   const source=`import{GitDraftStore}from ${JSON.stringify(path.join(root,'server/git-drafts.mjs'))};const s=new GitDraftStore({dataDir:${JSON.stringify(dir)}});process.on('message',async()=>{try{process.send({row:await s.save(${JSON.stringify(value())})});}catch(e){process.send({code:e.code});}finally{await s.close();process.disconnect();}});process.send({ready:true});`;
+   const source=`import{GitDraftStore}from ${JSON.stringify(pathToFileURL(path.join(root,'server/git-drafts.mjs')).href)};const s=new GitDraftStore({dataDir:${JSON.stringify(dir)}});process.on('message',async()=>{try{process.send({row:await s.save(${JSON.stringify(value())})});}catch(e){process.send({code:e.code});}finally{await s.close();process.disconnect();}});process.send({ready:true});`;
    const child=spawn(process.execPath,['--input-type=module','-e',source],{env:{PATH:process.env.PATH,HOME:process.env.HOME},stdio:['ignore','ignore','pipe','ipc']});children.push(child);
    let ready;const started=new Promise(resolve=>ready=resolve);const result=new Promise(resolve=>child.on('message',data=>data.ready?ready():resolve(data)));return {child,started,result};
   };

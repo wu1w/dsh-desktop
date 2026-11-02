@@ -20,8 +20,8 @@ if(mode==='success'){setTimeout(()=>process.exit(0),120);}
 else if(mode==='fail'){process.stderr.write('PRIVATE_LAUNCHER_SECRET '+target);process.exitCode=7;}
 else if(mode==='noisy'){process.stderr.write(Buffer.alloc(512*1024,65),()=>process.exit(3));}
 else if(mode==='handoff'){
- const child=require('node:child_process').spawn(process.execPath,['-e','setInterval(()=>{},1000)'],{stdio:['ignore','ignore',2]});
- fs.writeFileSync(marker,JSON.stringify({pid:process.pid,target,appPid:child.pid}));child.unref();process.exit(0);
+ const child=require('node:child_process').spawn(process.execPath,['-e','require("node:fs").writeFileSync(process.argv[1],"ready");setInterval(()=>{},1000)',marker+'.ready'],{detached:true,windowsHide:true,stdio:['ignore','ignore',2]});
+ child.unref();const waiting=setInterval(()=>{if(fs.existsSync(marker+'.ready')){clearInterval(waiting);fs.writeFileSync(marker,JSON.stringify({pid:process.pid,target,appPid:child.pid}));process.exit(0);}},5);
 }else setInterval(()=>{},1000);
 `;
 function fixtureSpawn(mode, marker, observed = []) {
@@ -68,7 +68,9 @@ test('timeout escalates an ignoring launcher to SIGKILL and waits for its exit',
   try {
     const began = Date.now();
     await assert.rejects(opener.open(path.join(root, 'target')), { code: 'FILE_OPEN_TIMEOUT' });
-    assert.ok(Date.now() - began >= 225); assert.equal(alive(observed[0].pid), false); assert.equal(opener.operations.size, 0);
+    // Windows TerminateProcess ends the launcher on the first kill; POSIX
+    // ignores TERM and must survive until the SIGKILL escalation deadline.
+    assert.ok(Date.now() - began >= (process.platform==='win32'?200:225)); assert.equal(alive(observed[0].pid), false); assert.equal(opener.operations.size, 0);
   } finally { await opener.close(); }
 }));
 

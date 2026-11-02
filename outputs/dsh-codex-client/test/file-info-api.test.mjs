@@ -1,3 +1,4 @@
+import {fixtureSymlink} from './fixtures/fs-platform.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtemp, mkdir, writeFile, readFile, stat, truncate, symlink, rm } from 'node:fs/promises';
@@ -36,9 +37,10 @@ test('authenticated file-info API exposes honest metadata without allowing unava
         assert.equal((await stat(target)).mtimeMs, before.mtimeMs); if (bytes) assert.deepEqual(await readFile(target), bytes);
       }
     });
-    await t.test('directories, a real FIFO, project traversal and external aliases are rejected', async () => {
-      await mkdir(path.join(projectPath, 'directory')); await execute('mkfifo', [path.join(projectPath, 'fifo')]); await writeFile(path.join(root, 'outside.txt'), 'private'); await symlink(path.join(root, 'outside.txt'), path.join(projectPath, 'alias.txt'));
-      for (const name of ['directory', 'fifo']) assert.equal((await api(route + query(name))).body.code, 'FILE_LIMIT');
+    await t.test('POSIX FIFO metadata is rejected',{skip:process.platform==='win32'?'POSIX FIFO is unavailable on Windows':false},async()=>{await execute('mkfifo',[path.join(projectPath,'fifo')]);assert.equal((await api(route+query('fifo'))).body.code,'FILE_LIMIT');});
+    await t.test('directories, project traversal and external aliases are rejected', async () => {
+      await mkdir(path.join(projectPath, 'directory')); await writeFile(path.join(root, 'outside.txt'), 'private'); await fixtureSymlink(path.join(root, 'outside.txt'), path.join(projectPath, 'alias.txt'));
+      for (const name of ['directory']) assert.equal((await api(route + query(name))).body.code, 'FILE_LIMIT');
       for (const name of ['../outside.txt', 'alias.txt']) assert.equal((await api(route + query(name))).body.code, 'OUTSIDE_PROJECT');
     });
     await t.test('method, route length and duplicate or absent path parameters are strictly rejected', async () => {

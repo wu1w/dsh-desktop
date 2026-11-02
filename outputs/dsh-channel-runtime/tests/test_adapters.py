@@ -419,4 +419,21 @@ class AdapterTests(unittest.IsolatedAsyncioTestCase):
         with patch.object(module,'_poll_bind_result',return_value=(module.BindStatus.EXPIRED,None,None,None)):
             self.assertEqual(await qr.poll(),{'status':'expired'})
 
+def tearDownModule():
+    # Synchronous SDK import tests can create Lark's module-level fallback loop
+    # outside IsolatedAsyncioTestCase. It belongs to this test process, not to a
+    # bridge worker. Close it explicitly instead of leaking its Windows IOCP.
+    sdk = sys.modules.get('lark_oapi.ws.client')
+    loop = getattr(sdk, 'loop', None)
+    loop = getattr(loop, '_fallback', loop)
+    if loop is not None and not loop.is_closed():
+        if loop.is_running():
+            raise AssertionError('SDK fallback loop still running after adapter shutdown')
+        tasks = asyncio.all_tasks(loop)
+        for task in tasks:
+            task.cancel()
+        if tasks:
+            loop.run_until_complete(asyncio.gather(*tasks, return_exceptions=True))
+        loop.close()
+
 if __name__=='__main__':unittest.main()

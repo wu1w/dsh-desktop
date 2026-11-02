@@ -1,3 +1,4 @@
+import {existsSync} from 'node:fs';
 import path from 'node:path';
 import {execFile} from 'node:child_process';
 import {randomUUID} from 'node:crypto';
@@ -18,7 +19,7 @@ export function windowsShell(env=process.env) {
 }
 export function windowsCommandArgs(shell,command) {
   if(path.win32.basename(shell).toLowerCase()==='cmd.exe')return ['/d','/s','/c',command];
-  return ['-NoLogo','-NoProfile','-NonInteractive','-EncodedCommand',Buffer.from("[Console]::OutputEncoding = New-Object System.Text.UTF8Encoding($false); $OutputEncoding = [Console]::OutputEncoding; "+command,'utf16le').toString('base64')];
+  return ['-NoLogo','-NoProfile','-NonInteractive','-EncodedCommand',Buffer.from("$ProgressPreference='SilentlyContinue'; [Console]::OutputEncoding = New-Object System.Text.UTF8Encoding($false); $OutputEncoding = [Console]::OutputEncoding; "+command,'utf16le').toString('base64')];
 }
 // Signal only this launch's unguessable, non-inherited stop event. Never look
 // up a numeric PID: the supervisor may exit while an asynchronous helper starts
@@ -29,9 +30,10 @@ export function stopWindowsJob(stopEvent,{env=process.env,execFileImpl=execFile}
   return new Promise((resolve,reject)=>execFileImpl(windowsShell(env),['-NoLogo','-NoProfile','-NonInteractive','-EncodedCommand',Buffer.from(script,'utf16le').toString('base64')],{windowsHide:true,timeout:7000,env:windowsEnvironment(env)},error=>error?reject(error):resolve()));
 }
 
-export function windowsJobCommand(executable,args,{env=process.env,source=fileURLToPath(new URL('./windows-job.cs',import.meta.url)),hostPid=process.pid,stopEvent='Local\\DSH-'+randomUUID()}={}) {
+export function windowsJobCommand(executable,args,{env=process.env,source=fileURLToPath(new URL('./windows-job.cs',import.meta.url)),hostPid=process.pid,helperPath=fileURLToPath(new URL('../native/bin/dsh-windows-job.exe',import.meta.url)),stopEvent='Local\\DSH-'+randomUUID()}={}) {
   if(!Number.isSafeInteger(hostPid)||hostPid<=0)throw Object.assign(Error('WINDOWS_PROCESS_INVALID'),{code:'WINDOWS_PROCESS_INVALID'});
   if(!/^Local\\DSH-[a-f0-9-]{36}$/.test(stopEvent))throw Object.assign(Error('WINDOWS_JOB_INVALID'),{code:'WINDOWS_JOB_INVALID'});
+  if(helperPath&&existsSync(helperPath))return {stopEvent,file:helperPath,args:[String(hostPid),stopEvent,executable,...args]};
   const quote=value=>"'"+value.replaceAll("'","''")+"'";
   const encodedArgs=Buffer.from(JSON.stringify(args),'utf8').toString('base64');
   const script="$ErrorActionPreference='Stop';$ProgressPreference='SilentlyContinue';try{Add-Type -Path "+quote(source)+";$dshArgs=ConvertFrom-Json ([Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('"+encodedArgs+"')));$dshCode=[Dsh.WindowsJob]::Run("+quote(executable)+",[string[]]$dshArgs,"+hostPid+","+quote(stopEvent)+");exit $dshCode}catch{[Console]::Error.WriteLine('DSH_WINDOWS_JOB_FAILED');exit 125}";

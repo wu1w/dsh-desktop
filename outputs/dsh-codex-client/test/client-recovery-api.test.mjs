@@ -1,3 +1,5 @@
+import {assertPrivatePermissions} from './fixtures/permissions.mjs';
+import {fixtureSymlink} from './fixtures/fs-platform.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {mkdtemp,mkdir,readFile,writeFile,rm,stat,symlink} from 'node:fs/promises';
@@ -15,7 +17,7 @@ test('corrupt startup serves an actionable shell, blocks execution, and only a d
     let keyCalls=0;host=await startHost({dataDir,autoStart:false,engineOptions:{resolveApiKey:async()=>{keyCalls++;throw Error('MUST_NOT_RESOLVE_DURING_RECOVERY');}}});
     const{boot,api}=await client(host);assert.equal(boot.state.recovery.code,'CLIENT_STATE_INVALID');assert.equal(boot.state.appearance,null);assert.equal(boot.state.plugins.length,0);assert.equal(boot.state.engine.state,'stopped');assert.equal(keyCalls,0);assert.ok(!JSON.stringify(boot).includes('INVALID_PRIVATE_CONTENT'));
     assert.equal((await stat(file)).mtimeMs,before.mtimeMs);assert.deepEqual(await readFile(file),original);assert.equal((await api('projects',{path:directory})).code,'CLIENT_STATE_RECOVERY_REQUIRED');assert.equal((await api('engine/enable',{})).code,'CLIENT_STATE_RECOVERY_REQUIRED');assert.equal((await api('plugins/install',{path:directory})).code,'CLIENT_STATE_RECOVERY_REQUIRED');
-    assert.equal((await fetch(host.url+'/recovery-view.js')).status,200);const reset=await api('recovery',{action:'reset'});assert.equal(reset.httpStatus,200);assert.equal(reset.recovery,null);assert.equal(path.basename(reset.archive),reset.archive);assert.deepEqual(await readFile(path.join(dataDir,reset.archive)),original);assert.equal((await stat(path.join(dataDir,reset.archive))).mode&0o777,0o600);assert.equal((await readFile(path.join(dataDir,'engine','preserved'),'utf8')),'ENGINE_HISTORY_SENTINEL');assert.equal(keyCalls,0);
+    assert.equal((await fetch(host.url+'/recovery-view.js')).status,200);const reset=await api('recovery',{action:'reset'});assert.equal(reset.httpStatus,200);assert.equal(reset.recovery,null);assert.equal(path.basename(reset.archive),reset.archive);assert.deepEqual(await readFile(path.join(dataDir,reset.archive)),original);assertPrivatePermissions(path.join(dataDir,reset.archive),0o600);assert.equal((await readFile(path.join(dataDir,'engine','preserved'),'utf8')),'ENGINE_HISTORY_SENTINEL');assert.equal(keyCalls,0);
     const live=await api('state');assert.equal(live.recovery,null);assert.equal(live.plugins.filter(plugin=>plugin.active).length,20);assert.equal(live.sessions.length,0);assert.equal((await api('projects',{path:directory})).httpStatus,200);assert.equal((await api('preferences',{selected:'nonexistent-chat'})).code,'INVALID_REQUEST');
     await host.close();host=await startHost({dataDir,autoStart:false});assert.equal(host.state().recovery,null);assert.equal(host.state().projects.length,1);
   }finally{await host?.close();await rm(directory,{recursive:true,force:true});}
@@ -36,7 +38,7 @@ test('restoring the displayed valid backup preserves the exact damaged file and 
 test('unsafe state symlinks remain untouched and cannot be reset through the recovery API',async()=>{
   const directory=await mkdtemp(path.join(tmpdir(),'dsh-client-unsafe-api-')),dataDir=path.join(directory,'data');let host;
   try{
-    await mkdir(dataDir);const outside=path.join(directory,'outside.json');await writeFile(outside,'OUTSIDE_UNCHANGED');await symlink(outside,path.join(dataDir,'client.json'));host=await startHost({dataDir,autoStart:false});const{boot,api}=await client(host);assert.equal(boot.state.recovery.canReset,false);assert.equal(boot.state.recovery.code,'CLIENT_STATE_UNSAFE_PATH');assert.equal((await api('recovery',{action:'reset'})).code,'CLIENT_STATE_RECOVERY_UNAVAILABLE');assert.equal(await readFile(outside,'utf8'),'OUTSIDE_UNCHANGED');
+    await mkdir(dataDir);const outside=path.join(directory,'outside.json');await writeFile(outside,'OUTSIDE_UNCHANGED');await fixtureSymlink(outside,path.join(dataDir,'client.json'));host=await startHost({dataDir,autoStart:false});const{boot,api}=await client(host);assert.equal(boot.state.recovery.canReset,false);assert.equal(boot.state.recovery.code,'CLIENT_STATE_UNSAFE_PATH');assert.equal((await api('recovery',{action:'reset'})).code,'CLIENT_STATE_RECOVERY_UNAVAILABLE');assert.equal(await readFile(outside,'utf8'),'OUTSIDE_UNCHANGED');
   }finally{await host?.close();await rm(directory,{recursive:true,force:true});}
 });
 test('reread accepts a deliberately repaired index while stale destructive recovery is rejected',async()=>{

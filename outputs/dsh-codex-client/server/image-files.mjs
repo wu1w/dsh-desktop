@@ -1,4 +1,4 @@
-import {open,realpath,stat} from 'node:fs/promises';
+import {open,realpath,stat,lstat} from 'node:fs/promises';
 import {constants} from 'node:fs';
 import {createHash,randomUUID} from 'node:crypto';
 import path from 'node:path';
@@ -96,8 +96,10 @@ export class ImageFileReader{
   async _load(root,relative,operation){
     requireImage(typeof relative==='string'&&relative.length>0&&!relative.includes('\0')&&!path.isAbsolute(relative)&&!relative.split('/').includes('..'),'IMAGE_UNSAFE_PATH');
     const canonicalRoot=await realpath(root),target=await projectFile(canonicalRoot,relative);requireImage(!sensitive(relative)&&!sensitive(path.relative(canonicalRoot,target)),'IMAGE_UNSAFE_PATH');this._check(operation);
+    const expected=await lstat(target,{bigint:true});requireImage(expected.isFile()&&!expected.isSymbolicLink(),'IMAGE_UNSAFE_PATH');
     operation.handle=await open(target,constants.O_RDONLY|constants.O_NOFOLLOW|constants.O_NONBLOCK);
     try{
+      const identity=await operation.handle.stat({bigint:true});requireImage(identity.dev===expected.dev&&identity.ino===expected.ino&&await projectFile(canonicalRoot,relative)===target,'IMAGE_CHANGED');
       const before=await operation.handle.stat();requireImage(before.isFile(),'IMAGE_UNSAFE_PATH');requireImage(before.size<=IMAGE_LIMITS.bytes,'IMAGE_LIMIT');const chunks=[];let length=0;
       for(;;){this._check(operation);const bytes=Buffer.allocUnsafe(Math.min(65536,IMAGE_LIMITS.bytes+1-length));const {bytesRead}=await operation.handle.read(bytes,0,bytes.length,null);this._check(operation);if(!bytesRead)break;length+=bytesRead;requireImage(length<=IMAGE_LIMITS.bytes,'IMAGE_LIMIT');chunks.push(bytes.subarray(0,bytesRead));}
       const after=await operation.handle.stat(),current=await stat(target);requireImage(same(before,after)&&same(after,current)&&length===after.size&&await projectFile(canonicalRoot,relative)===target,'IMAGE_CHANGED');this._check(operation);

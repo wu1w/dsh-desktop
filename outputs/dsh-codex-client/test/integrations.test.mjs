@@ -1,3 +1,4 @@
+import {assertPrivatePermissions} from './fixtures/permissions.mjs';
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
@@ -110,8 +111,8 @@ test("stdio save writes owned config, reloads, and list redacts env values", asy
     assert.equal(JSON.stringify(listed).includes(SECRET), false);
     assert.equal(JSON.stringify(listed).includes("foreign"), false);
     assert.deepEqual(engine.requests.at(-1).params, { detail: "toolsAndAuthOnly" });
-    assert.equal(fs.statSync(dataDir).mode & 0o777, 0o700);
-    assert.equal(fs.statSync(path.join(dataDir, "integrations.json")).mode & 0o777, 0o600);
+    assertPrivatePermissions(dataDir,0o700);
+    assertPrivatePermissions(path.join(dataDir, "integrations.json"),0o600);
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }

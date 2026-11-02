@@ -1,3 +1,6 @@
+import {permissionSnapshot} from './fixtures/permissions.mjs';
+import {assertPrivatePermissions} from './fixtures/permissions.mjs';
+import {fixtureSymlink} from './fixtures/fs-platform.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {mkdtemp,rm,mkdir,readFile,writeFile,stat,lstat,readdir,symlink} from 'node:fs/promises';
@@ -21,8 +24,8 @@ test('document recovery survives a new store without depending on the applicatio
     assert.ok(!Number.isNaN(Date.parse(saved.updatedAt)));
     const second=new DocumentDraftStore({dataDir});
     assert.deepEqual(await second.load(),[saved]);assert.deepEqual(await second.read(base),saved);
-    assert.equal((await stat(path.join(dataDir,'document-drafts.json'))).mode&0o777,0o600);
-    assert.equal((await stat(dataDir)).mode&0o777,0o700);
+    assertPrivatePermissions(path.join(dataDir,'document-drafts.json'),0o600);
+    assertPrivatePermissions(dataDir,0o700);
     assert.equal(await readFile(path.join(project,'chapter.md'),'utf8'),'saved original');
     assert.deepEqual(await second.clear(base),{cleared:true});assert.equal(await second.read(base),null);
     assert.deepEqual(await new DocumentDraftStore({dataDir}).read(),[]);
@@ -85,12 +88,12 @@ test('corrupt recovery files are preserved, block accidental overwrite, and can 
   const root=await fixture();
   try {
     const file=path.join(root,'document-drafts.json');const corrupt='{incomplete document recovery';
-    await writeFile(file,corrupt,{mode:0o640});const before=await stat(file);
+    await writeFile(file,corrupt,{mode:0o640});const before=await stat(file),beforePermissions=permissionSnapshot(file);
     const store=new DocumentDraftStore({dataDir:root});
     await assert.rejects(store.load(),error=>error.code==='DOCUMENT_DRAFTS_CORRUPT'&&error.recoverable===true);
     await rejectsCode(store.save(base),'DOCUMENT_DRAFTS_CORRUPT');await rejectsCode(store.clear(base),'DOCUMENT_DRAFTS_CORRUPT');
     assert.equal(await readFile(file,'utf8'),corrupt);
-    assert.equal((await stat(file)).mtimeMs,before.mtimeMs);assert.equal((await stat(file)).mode&0o777,0o640);
+    assert.equal((await stat(file)).mtimeMs,before.mtimeMs);assert.deepEqual(permissionSnapshot(file),beforePermissions);
     await writeFile(file,JSON.stringify({version:1,drafts:[]}));assert.deepEqual(await store.load(),[]);
     await store.save(base);assert.equal((await store.read(base)).content,base.content);
   }finally{await rm(root,{recursive:true,force:true});}
@@ -112,7 +115,7 @@ test('a recovery-file symlink is never read or overwritten',async()=>{
   const root=await fixture();
   try {
     const outside=path.join(root,'outside.json');const dataDir=path.join(root,'data');await mkdir(dataDir);
-    await writeFile(outside,'outside contents must survive');await symlink(outside,path.join(dataDir,'document-drafts.json'));
+    await writeFile(outside,'outside contents must survive');await fixtureSymlink(outside,path.join(dataDir,'document-drafts.json'));
     const store=new DocumentDraftStore({dataDir});
     await rejectsCode(store.load(),'DOCUMENT_DRAFTS_UNSAFE');await rejectsCode(store.save(base),'DOCUMENT_DRAFTS_UNSAFE');
     assert.equal(await readFile(outside,'utf8'),'outside contents must survive');

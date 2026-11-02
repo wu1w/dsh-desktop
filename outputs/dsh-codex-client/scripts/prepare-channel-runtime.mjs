@@ -1,3 +1,4 @@
+import {withRuntimeInstallLock} from './runtime-install-lock.mjs';
 import {mkdir,mkdtemp,readdir,rename,rm,access} from 'node:fs/promises';
 import {execFile} from 'node:child_process';
 import {promisify} from 'node:util';
@@ -10,20 +11,24 @@ const run = promisify(execFile);
 // Keep recoverable backups if a locked file or filesystem error prevents rollback.
 // Never delete the only previous runtime merely because its restoration failed.
 export async function installStagedRuntime(root,stage,{renamePath=rename,removePath=rm,exists=access}={}) {
+  return withRuntimeInstallLock(root,async ({assertHeld})=>{
   const backups=[],installed=[];
   try {
     for(const name of ['python','packages']) {
+      await assertHeld();
       const target=path.join(root,name),backup=path.join(stage,'previous-'+name);
       try{await exists(target);await renamePath(target,backup);backups.push([target,backup]);}catch(error){if(error.code!=='ENOENT')throw error;}
       await renamePath(path.join(stage,name),target);installed.push(target);
     }
   }catch(error){
+    try{await assertHeld();}catch{throw Object.assign(Error('CHANNEL_PREPARE_LOCK_LOST',{cause:error}),{code:'CHANNEL_PREPARE_LOCK_LOST',recoveryDirectory:stage});}
     let rollbackFailed=false;
     for(const target of installed.reverse())try{await removePath(target,{recursive:true,force:true});}catch{rollbackFailed=true;}
     for(const [target,backup] of backups.reverse())try{await renamePath(backup,target);}catch{rollbackFailed=true;}
     if(rollbackFailed)throw Object.assign(Error('CHANNEL_PREPARE_ROLLBACK_FAILED',{cause:error}),{code:'CHANNEL_PREPARE_ROLLBACK_FAILED',recoveryDirectory:stage});
     throw error;
   }
+  });
 }
 
 export async function prepareChannelRuntime({root=fileURLToPath(new URL('../../dsh-channel-runtime/',import.meta.url)),uv=process.env.DSH_UV_BINARY || 'uv',platform=process.platform,arch=process.arch,execute=run}={}) {
@@ -50,7 +55,7 @@ export async function prepareChannelRuntime({root=fileURLToPath(new URL('../../d
     await installStagedRuntime(root,stage);
     return {platform,arch,python:channelPythonPath(root),version};
   } catch(error) {
-    preserveStage=error.code==='CHANNEL_PREPARE_ROLLBACK_FAILED';
+    preserveStage=['CHANNEL_PREPARE_ROLLBACK_FAILED','CHANNEL_PREPARE_LOCK_LOST','CHANNEL_RUNTIME_LOCK_LOST'].includes(error.code);
     throw error;
   } finally {if(!preserveStage)await rm(stage,{recursive:true,force:true});}
 }

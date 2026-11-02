@@ -1,3 +1,5 @@
+import {spawnPosixCommand,posixCommandResult,requestPosixStop} from './posix-command-supervisor.mjs';
+import {windowsEnvironment,windowsJobCommand,stopWindowsJob} from './windows-process.mjs';
 import { spawn } from 'node:child_process';
 import { realpath, stat, lstat, open, readlink, writeFile, rename, unlink, readdir } from 'node:fs/promises';
 import { constants } from 'node:fs';
@@ -10,28 +12,11 @@ const decode = (bytes, code = 'GIT_PATH_ENCODING') => { try { return new TextDec
 const pause = milliseconds => new Promise(resolve => setTimeout(resolve, milliseconds));
 const sha = value => createHash('sha256').update(value).digest('hex');
 const canonical = value => JSON.stringify(value);
-function groupExists(child) {
-  if (!child.pid) return false;
-  try { process.kill(-child.pid, 0); return true; }
-  catch (error) {
-    if (error.code === 'ESRCH') return false;
-    // macOS may deny process-group probes for its platform-signed Git while
-    // still allowing the parent to signal its exact child. Git hooks, pagers
-    // and external conversion/diff helpers are disabled below.
-    if (error.code !== 'EPERM') throw error;
-    try { process.kill(child.pid, 0); return true; } catch (direct) { if (direct.code === 'ESRCH') return false; throw direct; }
-  }
-}
 async function terminate(child, grace, confirmMs) {
-  const signal = value => { try { process.kill(-child.pid, value); } catch (error) { if (error.code === 'EPERM') child.kill(value); else if (error.code !== 'ESRCH') throw error; } };
-  if (!groupExists(child)) return;
-  signal('SIGTERM');
-  const deadline = Date.now() + grace;
-  while (groupExists(child) && Date.now() < deadline) await pause(10);
-  if (groupExists(child)) signal('SIGKILL');
-  const finalDeadline=Date.now()+confirmMs;
-  while(groupExists(child)&&Date.now()<finalDeadline)await pause(10);
-  if(groupExists(child))throw fault('GIT_CLEANUP_FAILED');
+  requestPosixStop(child);
+  const deadline=Date.now()+grace+confirmMs;
+  while(child.exitCode===null&&child.signalCode===null&&Date.now()<deadline)await pause(10);
+  if(child.exitCode===null&&child.signalCode===null)throw fault('GIT_CLEANUP_FAILED');
 }
 function fields(record, count) {
   const values = []; let offset = 0;
@@ -79,8 +64,8 @@ function parseStatus(bytes) {
 
 /** Bounded local Git access. Each instance owns and can abort all its work. */
 export class ProjectGit {
-  constructor({ gitBinary = 'git', timeoutMs = 30000, maxOutputBytes = 2 * 1024 * 1024, killGraceMs = 150, cleanupWaitMs = 1000, closeTimeoutMs = 10000 } = {}) {
-    this.gitBinary = gitBinary; this.timeoutMs = timeoutMs; this.maxOutputBytes = maxOutputBytes; this.killGraceMs = killGraceMs;
+  constructor({ gitBinary = 'git', gitArgs = [], timeoutMs = 30000, maxOutputBytes = 2 * 1024 * 1024, killGraceMs = 150, cleanupWaitMs = 1000, closeTimeoutMs = 10000 } = {}) {
+    this.gitBinary = gitBinary; this.gitArgs=gitArgs;this.childStops=new WeakMap(); this.timeoutMs = timeoutMs; this.maxOutputBytes = maxOutputBytes; this.killGraceMs = killGraceMs;
     this.operations = new Map(); this.children = new Set(); this.childOwners=new WeakMap();this.cleanupTasks=new Set();this.cleanupWaitMs=cleanupWaitMs;this.closeTimeoutMs=closeTimeoutMs;this.closed = false; this.repoTails = new Map();
   }
   _operation(signal, work) {
@@ -99,13 +84,40 @@ export class ProjectGit {
     if (signal.aborted) throw signal.reason;
     const environment = Object.fromEntries(['PATH', 'HOME', 'USER', 'TMPDIR', 'SystemRoot','XDG_CONFIG_HOME'].filter(key => process.env[key]).map(key => [key, process.env[key]]));
     Object.assign(environment, { LC_ALL: 'C', LANG: 'C', GIT_OPTIONAL_LOCKS: '0', GIT_TERMINAL_PROMPT: '0', GIT_CONFIG_NOSYSTEM: '1', GIT_CONFIG_GLOBAL: '/dev/null', GIT_ATTR_NOSYSTEM: '1', GIT_PAGER: 'cat', GIT_NO_LAZY_FETCH:'1' }, env);
-    if(normalConfig){delete environment.GIT_CONFIG_GLOBAL;delete environment.GIT_CONFIG_NOSYSTEM;}
-    const child = spawn(this.gitBinary, ['--no-pager', '--literal-pathspecs', '-c', 'core.fsmonitor=false', '-c', 'core.hooksPath=/dev/null', '-c', 'diff.external=', '-c', 'color.ui=false', '-c','protocol.allow=never','-c','commit.gpgsign=false','-c','gc.auto=0', ...args], { cwd: root, env: environment, detached: true, stdio: [input===undefined?'ignore':'pipe', 'pipe', 'pipe'] });
+    if(normalConfig){for(const key of ['GIT_CONFIG_GLOBAL','GIT_CONFIG_NOSYSTEM']){if(process.env[key]!==undefined)environment[key]=process.env[key];else delete environment[key];}}
+    const gitArguments = [...this.gitArgs,'--no-pager', '--literal-pathspecs', '-c', 'core.fsmonitor=false', '-c', 'core.hooksPath=/dev/null', '-c', 'diff.external=', '-c', 'color.ui=false', '-c','protocol.allow=never','-c','commit.gpgsign=false','-c','gc.auto=0', ...args];
+    let executable=this.gitBinary,launch;
+    if(process.platform==='win32'){
+      Object.assign(environment,windowsEnvironment(process.env));
+      if(!path.win32.isAbsolute(executable)){
+        const extensions=path.win32.extname(executable)?['']:['.exe','.com'];let found;
+        for(const directory of String(environment.PATH??'').split(';')){if(!path.win32.isAbsolute(directory))continue;for(const ext of extensions){const candidate=path.win32.join(directory,executable+ext);try{if((await stat(candidate)).isFile()){found=candidate;break;}}catch{}}if(found)break;}
+        if(!found)throw fault('GIT_NOT_INSTALLED');executable=found;
+      }
+      try{if(!(await stat(executable)).isFile())throw Error();}catch{throw fault('GIT_NOT_INSTALLED');}
+      launch=windowsJobCommand(executable,gitArguments,{env:environment});
+    }
+    if(signal.aborted)throw signal.reason;
+    const child = process.platform==='win32'?spawn(launch.file,launch.args,{cwd:root,env:environment,detached:false,windowsHide:true,stdio:[input===undefined?'ignore':'pipe','pipe','pipe']}):spawnPosixCommand(executable,gitArguments,{cwd:root,env:environment,graceMs:this.killGraceMs,stdin:input===undefined?'ignore':'pipe'});
     if(input!==undefined){child.stdin.on('error',()=>{});if(afterPrepare)child.stdin.write(input);else child.stdin.end(input);}
     this.children.add(child);
     const owner=[...this.operations.keys()].find(controller=>controller.signal===signal);if(owner)this.childOwners.set(child,owner);if(child.pid)owner?.childPids.add(child.pid);
-    const stdout = [], stderr = []; let size = 0, failure, stopping, prepared=false;
-    const stop = () => stopping ??= terminate(child, this.killGraceMs,this.cleanupWaitMs);
+    const stdout = [], stderr = []; let size = 0, failure, stopping, prepared=false,finished=false;
+    const stop = () => stopping ??= (async()=>{
+      // update-ref --stdin has an explicit abort protocol. Let Git release its
+      // native HEAD/ref locks before escalating to OS termination on any OS.
+      if(afterPrepare&&!finished&&!child.stdin.destroyed){
+        try{child.stdin.end('abort\n');}catch{}
+        const deadline=Date.now()+Math.max(500,this.killGraceMs);while(!finished&&Date.now()<deadline)await pause(10);
+        if(finished)return;
+      }
+      if(process.platform!=='win32')return terminate(child,this.killGraceMs,this.cleanupWaitMs);
+      if(finished)return;
+      try{await stopWindowsJob(launch.stopEvent,{env:environment});}catch(error){if(!finished)throw error;}
+      const deadline=Date.now()+this.cleanupWaitMs;while(!finished&&Date.now()<deadline)await pause(10);
+      if(!finished)throw fault('GIT_CLEANUP_FAILED');
+    })();
+    this.childStops.set(child,stop);
     const abort = () => { failure ??= signal.reason ?? fault('GIT_ABORTED'); void stop().catch(() => {}); };
     const append = chunks => chunk => {
       size += chunk.length;
@@ -116,7 +128,7 @@ export class ProjectGit {
     child.stdout.on('data', append(stdout)); child.stderr.on('data', append(stderr));
     signal.addEventListener('abort', abort, { once: true }); if (signal.aborted) abort();
     try {
-      const code = await new Promise((resolve, reject) => { child.once('error', reject); child.once('close', resolve); });
+      const code = await new Promise((resolve, reject) => { child.once('error', reject); child.once('close',(code,signal)=>{finished=true;const result=process.platform==='win32'?{code}:posixCommandResult(child,code,signal);if(result.errorCode)reject(Object.assign(Error(result.errorCode),{code:result.errorCode}));else resolve(result.code);}); });
       if (failure) throw failure;
       if (!accepted.includes(code)) throw fault('GIT_FAILED');
       return { stdout: Buffer.concat(stdout), stderr: Buffer.concat(stderr), code };
@@ -368,7 +380,7 @@ export class ProjectGit {
     const cleanup=async()=>{
       await Promise.allSettled([...this.operations.values()]);
       const results=await Promise.allSettled([
-        ...[...this.children].map(async child=>{await terminate(child,this.killGraceMs,this.cleanupWaitMs);this.children.delete(child);this.childOwners.get(child)?.childPids.delete(child.pid);}),
+        ...[...this.children].map(async child=>{await (this.childStops.get(child)?.()??terminate(child,this.killGraceMs,this.cleanupWaitMs));this.children.delete(child);this.childOwners.get(child)?.childPids.delete(child.pid);}),
         ...[...this.cleanupTasks].map(resource=>this._cleanResource(resource)),
       ]);
       if(results.some(result=>result.status==='rejected')||this.operations.size||this.children.size||this.cleanupTasks.size)throw fault('GIT_CLEANUP_FAILED');

@@ -1,3 +1,4 @@
+import {fixtureSymlink} from './fixtures/fs-platform.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtemp, mkdir, symlink, rm, readdir, writeFile, readFile, realpath } from 'node:fs/promises';
@@ -12,7 +13,7 @@ test('independent data validation rejects original homes and symlinked missing d
     const original = path.join(root, 'original');
     await mkdir(original);
     await writeFile(path.join(original, 'sentinel'), 'preserve');
-    await symlink(original, path.join(root, 'alias'));
+    await fixtureSymlink(original, path.join(root, 'alias'));
     const options = { protectedRoots: [original] };
     for (const candidate of [original, root, path.join(original, 'missing', 'child'), path.join(root, 'alias', 'missing', 'child')]) {
       await assert.rejects(assertIndependentDataDirectory(candidate, options), { code: 'PROTECTED_DATA_DIRECTORY' });

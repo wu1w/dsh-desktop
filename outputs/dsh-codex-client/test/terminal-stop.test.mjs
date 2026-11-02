@@ -1,3 +1,5 @@
+import {windows,commandShell,nodeCommand,assertStopped} from './fixtures/command-platform.mjs';
+import {denyOwnedStop} from './fixtures/stop-fault.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {mkdtemp,readFile,rm,writeFile} from 'node:fs/promises';
@@ -15,16 +17,16 @@ const kill=process.kill.bind(process);
 const exists=pid=>{try{kill(pid,0);return true;}catch(error){if(error.code==='ESRCH')return false;throw error;}};
 async function until(read,timeout=5000){const deadline=Date.now()+timeout;while(Date.now()<deadline){const value=await read();if(value)return value;await pause(20);}assert.fail('Owned process did not reach expected state');}
 async function marker(file){return until(async()=>{try{return Number(await readFile(file,'utf8'))||false;}catch(error){if(error.code!=='ENOENT')throw error;return false;}});}
-const stubborn=file=>`exec ${quote(process.execPath)} -e ${quote(`process.on('SIGTERM',()=>{});require('node:fs').writeFileSync(${JSON.stringify(file)},String(process.pid));setInterval(()=>{},1000);`)}`;
-function killOwnedGroup(pid){if(!pid)return;try{kill(-pid,'SIGKILL');}catch(error){if(error.code!=='ESRCH')throw error;}}
+const stubborn=file=>nodeCommand(`process.on('SIGTERM',()=>{});require('node:fs').writeFileSync(${JSON.stringify(file)},String(process.pid));setInterval(()=>{},1000);`);
+function killOwnedGroup(pid){if(!pid)return;try{kill(windows?pid:-pid,'SIGKILL');}catch(error){if(error.code!=='ESRCH')throw error;}}
 
 test('failed command SIGKILL is bounded, retains activity, rejects its request and can be retried',async t=>{
   const cwd=await mkdtemp(path.join(tmpdir(),'dsh-terminal-stop-retry-')),commands=new Set();let pending,child,pid;
   try{
-    pending=runProjectCommand({command:stubborn(path.join(cwd,'ready')),cwd,commands,shell:'/bin/sh',timeoutMs:30000,killGraceMs:30});
+    pending=runProjectCommand({command:stubborn(path.join(cwd,'ready')),cwd,commands,shell:commandShell,timeoutMs:30000,killGraceMs:30});
     const settled=pending.then(value=>({value}),error=>({error}));
-    pid=await marker(path.join(cwd,'ready'));child=[...commands][0];assert.equal(child.pid,pid);
-    const interception=t.mock.method(process,'kill',(target,signal)=>target===-pid&&signal==='SIGKILL'?true:kill(target,signal));
+    pid=await marker(path.join(cwd,'ready'));child=[...commands][0];assert.ok(exists(child.pid));if(!windows)assert.notEqual(child.pid,pid,'the live supervisor owns a separate command process');
+    const interception=denyOwnedStop(t,[...commands][0],kill);
     const started=Date.now(),first=stopProjectCommand(child);
     assert.equal(stopProjectCommand(child),first,'concurrent stops share one attempt');
     await assert.rejects(first,{code:'COMMAND_STOP_FAILED'});
@@ -41,10 +43,16 @@ test('escaped pipe holder does not make command cleanup wait forever or lose the
   try{
     const file=path.join(cwd,'escaped');
     const worker=`require('node:fs').writeFileSync(${JSON.stringify(file)},String(process.pid));setInterval(()=>{},1000);`;
-    const leader=`const p=require('node:child_process').spawn(process.execPath,['-e',${JSON.stringify(worker)}],{detached:true,stdio:['ignore','inherit','inherit']});p.unref();`;
-    pending=runProjectCommand({command:`exec ${quote(process.execPath)} -e ${quote(leader)}`,cwd,commands,shell:'/bin/sh',timeoutMs:30000});
+    const leader=`const p=require('node:child_process').spawn(process.execPath,['-e',${JSON.stringify(worker)}],{detached:true,stdio:['ignore','inherit','inherit']});p.unref();${windows?'setInterval(()=>{},1000);':''}`;
+    pending=runProjectCommand({command:nodeCommand(leader),cwd,commands,shell:commandShell,timeoutMs:30000});
     const settled=pending.then(value=>({value}),error=>({error}));
-    const child=[...commands][0];escaped=await marker(file);await until(()=>!exists(child.pid));
+    const child=[...commands][0];escaped=await marker(file);
+    if(windows){
+      // A detached Windows child remains in our kernel Job. It cannot escape
+      // ownership by changing process groups while retaining inherited pipes.
+      await stopProjectCommand(child);assert.equal(commands.size,0);assert.equal(exists(escaped),false);assertStopped((await settled).value);return;
+    }
+    await until(()=>!exists(child.pid));
     const started=Date.now();await assert.rejects(stopProjectCommand(child),{code:'COMMAND_STOP_FAILED'});
     assert.ok(Date.now()-started<2000);assert.equal(commands.has(child),true);assert.equal(exists(escaped),true);
     assert.equal((await settled).error.code,'COMMAND_STOP_FAILED');
@@ -55,14 +63,14 @@ test('escaped pipe holder does not make command cleanup wait forever or lose the
 test('bulk command stop settles other owned cleanups before reporting a failed process',async t=>{
   const cwd=await mkdtemp(path.join(tmpdir(),'dsh-terminal-stop-all-')),commands=new Set(),pids=[];let intercept,pending=[];
   try{
-    pending=[30,1400].map((killGraceMs,index)=>runProjectCommand({command:stubborn(path.join(cwd,'ready'+index)),cwd,commands,shell:'/bin/sh',killGraceMs,timeoutMs:30000}).then(value=>({value}),error=>({error})));
+    pending=[30,1400].map((killGraceMs,index)=>runProjectCommand({command:stubborn(path.join(cwd,'ready'+index)),cwd,commands,shell:commandShell,killGraceMs,timeoutMs:30000}).then(value=>({value}),error=>({error})));
     pids.push(await marker(path.join(cwd,'ready0')),await marker(path.join(cwd,'ready1')));
-    intercept=t.mock.method(process,'kill',(target,signal)=>target===-pids[0]&&signal==='SIGKILL'?true:kill(target,signal));
+    const owners=[...commands];intercept=denyOwnedStop(t,owners[0],kill);
     await assert.rejects(stopProjectCommands(commands),{code:'COMMAND_STOP_FAILED'});
     assert.equal(exists(pids[0]),true);assert.equal(exists(pids[1]),false,'the slower cleanup completed before rejection');
-    assert.deepEqual([...commands].map(child=>child.pid),[pids[0]]);
+    assert.deepEqual([...commands],[owners[0]],'retain exactly the failed supervisor');
     intercept.mock.restore();intercept=null;await stopProjectCommands(commands);assert.equal(commands.size,0);
-    const results=await Promise.all(pending);assert.equal(results[0].error.code,'COMMAND_STOP_FAILED');assert.equal(results[1].value.signal,'SIGKILL');
+    const results=await Promise.all(pending);assert.equal(results[0].error.code,'COMMAND_STOP_FAILED');assertStopped(results[1].value);
   }finally{intercept?.mock.restore();pids.forEach(killOwnedGroup);await stopProjectCommands(commands).catch(()=>{});await Promise.all(pending);await rm(cwd,{recursive:true,force:true});}
 });
 
@@ -77,13 +85,13 @@ test('actual Cordis disable retains routes and activities until the terminal sto
     const settled=pending.then(value=>({value}),error=>({error}));
     pid=await marker(path.join(cwd,'ready'));
     const originalFiber=host.records.get('feature-terminal').fiber;
-    interception=t.mock.method(process,'kill',(target,signal)=>target===-pid&&signal==='SIGKILL'?true:kill(target,signal));
+    interception=denyOwnedStop(t,[...commands][0],kill);
     await assert.rejects(host.disable('feature-terminal'),{code:'COMMAND_STOP_FAILED'});
     assert.equal((await settled).error.code,'COMMAND_STOP_FAILED');assert.equal(answer,undefined);
     assert.equal(host.records.get('feature-terminal').fiber,originalFiber);
     assert.equal(host.list()[0].active,true);assert.equal(host.list()[0].error,'COMMAND_STOP_FAILED');
     assert.equal(host.routes.size,1);assert.equal(host.features.size,1);assert.equal(host.activityProviders.size,1);
-    assert.ok(host.activities().some(row=>row.kind==='command'&&row.id.endsWith('command-'+pid)));
+    assert.ok(host.activities().some(row=>row.kind==='command'&&row.id.endsWith('command-'+[...commands][0]?.pid)));
     const blockedMarker=path.join(cwd,'must-not-start'),before=[...commands];
     await assert.rejects(invoke('POST',['projects','project','terminal'],{command:`printf spawned > ${quote(blockedMarker)}`}),{code:'PTY_CLOSED'});
     assert.deepEqual([...commands],before);await assert.rejects(readFile(blockedMarker),{code:'ENOENT'});
@@ -101,11 +109,11 @@ test('actual Cordis disable retains routes and activities until the terminal sto
     pending=host.dispatch({segments:['projects','project','terminal'],request:{method:'POST'},body:{command:stubborn(path.join(cwd,'close-ready'))},json:()=>{}});
     const closeRequest=pending.then(value=>({value}),error=>({error}));
     pid=await marker(path.join(cwd,'close-ready'));
-    interception=t.mock.method(process,'kill',(target,signal)=>target===-pid&&signal==='SIGKILL'?true:kill(target,signal));
+    interception=denyOwnedStop(t,[...commands][0],kill);
     await assert.rejects(host.close(),{code:'PLUGIN_CLEANUP_FAILED'});
     assert.equal((await closeRequest).error.code,'COMMAND_STOP_FAILED');
     assert.equal(host.list()[0].active,true);assert.equal(host.routes.size,1);
-    assert.ok(host.activities().some(row=>row.kind==='command'&&row.id.endsWith('command-'+pid)));
+    assert.ok(host.activities().some(row=>row.kind==='command'&&row.id.endsWith('command-'+[...commands][0]?.pid)));
     interception.mock.restore();interception=null;
     await host.close();await host.close();assert.equal(exists(pid),false);assert.deepEqual(host.activities(),[]);
   }finally{interception?.mock.restore();killOwnedGroup(pid);await stopProjectCommands(commands).catch(()=>{});await pending?.catch(()=>{});await host?.close();await context.fiber.dispose();await rm(cwd,{recursive:true,force:true});}

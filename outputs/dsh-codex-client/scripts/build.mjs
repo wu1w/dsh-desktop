@@ -1,3 +1,4 @@
+import {withRuntimeInstallLock} from './runtime-install-lock.mjs';
 import {buildComputerHelper} from './build-computer.mjs';
 await buildComputerHelper();
 import { build } from 'esbuild';
@@ -23,8 +24,10 @@ const claudeSource=new URL('../../dsh-claude-engine/',import.meta.url);
 try { await cp(claudeSource,new URL('../claude-engine/',import.meta.url),{recursive:true,filter:source=>!relativeParts(source,claudeSource).some(part=>['node_modules','test'].includes(part))}); } catch(error) { if(error.code!=='ENOENT')throw error; }
 
 const channelSource = new URL('../../dsh-channel-runtime/',import.meta.url);
+await withRuntimeInstallLock(fileURLToPath(channelSource),async()=>{
 await rm(new URL('../channel-runtime/',import.meta.url),{recursive:true,force:true,maxRetries:3,retryDelay:100});
-await cp(channelSource,new URL('../channel-runtime/',import.meta.url),{recursive:true,verbatimSymlinks:true,filter:source=>!relativeParts(source,channelSource).some(part=>['__pycache__','.temp','tests'].includes(part)||part.startsWith('.prepare-'))&&!source.endsWith('.pyc')&&!source.endsWith('.o')&&!source.endsWith('/.DS_Store')});
+await cp(channelSource,new URL('../channel-runtime/',import.meta.url),{recursive:true,verbatimSymlinks:true,filter:source=>!relativeParts(source,channelSource).some(part=>['__pycache__','.temp','tests','.runtime-install.lock'].includes(part)||part.startsWith('.prepare-'))&&!source.endsWith('.pyc')&&!source.endsWith('.o')&&!source.endsWith('/.DS_Store')});
+});
 
 // Ship the pinned native Harness runtime with its own dependency tree.
 const nativeSource=new URL('../../dsh-native-engine/',import.meta.url);

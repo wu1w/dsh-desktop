@@ -1,3 +1,4 @@
+import {spawnPosixCommand,posixCommandResult,requestPosixStop} from './posix-command-supervisor.mjs';
 import { spawn } from 'node:child_process';
 import {windowsEnvironment,windowsShell,windowsCommandArgs,windowsJobCommand,stopWindowsJob} from './windows-process.mjs';
 
@@ -12,16 +13,6 @@ async function waitUntil(check, milliseconds) {
   }
   return true;
 }
-function groupExists(child) {
-  if (!child.pid) return false;
-  try { process.kill(-child.pid, 0); return true; }
-  catch (error) { if (error.code === 'ESRCH') return false; if (error.code === 'EPERM') return true; throw error; }
-}
-function signalGroup(child, signal) {
-  if (!child.pid) return;
-  try { process.kill(-child.pid, signal); }
-  catch (error) { if (error.code !== 'ESRCH') throw error; }
-}
 export function stopProjectCommand(child) {
   const execution = executions.get(child);
   if (!execution) return Promise.resolve();
@@ -32,17 +23,10 @@ export function stopProjectCommand(child) {
       // pipes. Its close event alone does not mean that the process group is gone.
       if(execution.platform==='win32'){
         if(!execution.doneSettled){try{await execution.stopJob(execution.stopEvent,{env:execution.environment});}catch(error){if(!execution.doneSettled)throw error;}}
-      }else if (groupExists(child)) {
-        signalGroup(child, 'SIGTERM');
-        if (!await waitUntil(() => !groupExists(child), execution.killGraceMs)) {
-          signalGroup(child, 'SIGKILL');
-          // Allow the OS a bounded interval to reap adopted descendants.
-          if (!await waitUntil(() => !groupExists(child), 1000)) throw stopFault();
-        }
-      }
+      }else requestPosixStop(child);
       // A descendant can escape its group while retaining an inherited pipe. Do
       // not wait forever for close, or discard ownership when it cannot be proved.
-      if (!await waitUntil(() => execution.doneSettled, 1000)) throw stopFault();
+      if (!await waitUntil(() => execution.doneSettled, execution.killGraceMs+1000)) throw stopFault();
       execution.commands.delete(child); executions.delete(child);
     } catch (cause) {
       const error = cause.code === 'COMMAND_STOP_FAILED' ? cause : stopFault(cause);
@@ -65,7 +49,7 @@ export async function runProjectCommand({ command, cwd, commands, shell, platfor
   shell??=platform==='win32'?windowsShell(env):env.SHELL||'/bin/zsh';
   const environment = platform==='win32'?windowsEnvironment(env):Object.fromEntries(['PATH', 'HOME', 'USER', 'LANG', 'TMPDIR', 'SHELL', 'TERM'].filter(key => env[key]).map(key => [key, env[key]]));
   const launch=platform==='win32'?windowsJobCommand(shell,windowsCommandArgs(shell,command),{env:environment}):{file:shell,args:['-c',command]};
-  const child = spawnProcess(launch.file,launch.args, { cwd, env: environment, detached: platform!=='win32', windowsHide:true, stdio: ['ignore', 'pipe', 'pipe'] });
+  const child = platform==='win32'?spawnProcess(launch.file,launch.args, { cwd, env: environment, detached:false, windowsHide:true, stdio: ['ignore', 'pipe', 'pipe'] }):spawnPosixCommand(launch.file,launch.args,{cwd,env:environment,graceMs:killGraceMs,spawnProcess});
   let size = 0;
   const chunks = [];
   const append = chunk => {
@@ -76,7 +60,7 @@ export async function runProjectCommand({ command, cwd, commands, shell, platfor
   child.stdout.on('data', append); child.stderr.on('data', append);
   const done = new Promise((resolve, reject) => {
     child.once('error', error=>reject(platform==='win32'?Object.assign(Error('COMMAND_START_FAILED',{cause:error}),{code:'COMMAND_START_FAILED'}):error));
-    child.once('close', (code, signal) => resolve({ code, signal }));
+    child.once('close', (code, signal) => {const result=platform==='win32'?{code,signal}:posixCommandResult(child,code,signal);if(result.errorCode)reject(Object.assign(Error(result.errorCode),{code:result.errorCode}));else resolve(result);});
   });
   let rejectStop;
   const stopFailed = new Promise((resolve, reject) => { rejectStop = reject; });
@@ -85,7 +69,15 @@ export async function runProjectCommand({ command, cwd, commands, shell, platfor
   executions.set(child, execution); commands.add(child);
   const timeout = setTimeout(() => { void stopProjectCommand(child).catch(() => {}); }, timeoutMs);
   let failedStop = false;
-  try { const result=await Promise.race([done,stopFailed]);const output=Buffer.concat(chunks).toString('utf8');if(platform==='win32'&&result.code===125&&output.includes('DSH_WINDOWS_JOB_FAILED'))throw Object.assign(Error('COMMAND_START_FAILED'),{code:'COMMAND_START_FAILED'});return {...result,output}; }
+  try {
+    const result=await Promise.race([done,stopFailed]);const output=Buffer.concat(chunks).toString('utf8');
+    if(platform==='win32'&&result.code===125&&output.includes('DSH_WINDOWS_JOB_FAILED'))throw Object.assign(Error('COMMAND_START_FAILED'),{code:'COMMAND_START_FAILED'});
+    // A POSIX process group cannot contain a child that creates a new session
+    // and redirects its pipes. Do not claim complete descendant cleanup based
+    // only on group disappearance or the shell's close event.
+    const cleanup=platform==='win32'?{verified:true,scope:'kernel-job'}:{verified:false,scope:'process-group',reason:'detached_descendants_unverified'};
+    return {...result,output,cleanup};
+  }
   catch (error) { failedStop = error.code === 'COMMAND_STOP_FAILED'; throw error; }
   finally {
     clearTimeout(timeout);

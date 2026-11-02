@@ -1,3 +1,4 @@
+import {fixtureSymlink} from './fixtures/fs-platform.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {mkdtemp,mkdir,writeFile,readFile,rm,readdir,symlink} from 'node:fs/promises';
@@ -50,7 +51,7 @@ test('successful Python preparation replaces both generated directories without 
   const root=await mkdtemp(path.join(tmpdir(),'dsh-python-prepare-'));t.after(()=>rm(root,{recursive:true,force:true}));
   await mkdir(path.join(root,'packages'));await writeFile(path.join(root,'packages','stale'),'old');
   async function execute(command,args){
-    if(args.includes('python')){const pythonRoot=args[args.indexOf('--install-dir')+1],distribution=path.join(pythonRoot,`cpython-${CHANNEL_PYTHON_VERSION}-fixture`);await mkdir(distribution);await symlink(distribution,path.join(pythonRoot,'cpython-version-alias'),process.platform==='win32'?'junction':'dir');return {stdout:''};}
+    if(args.includes('python')){const pythonRoot=args[args.indexOf('--install-dir')+1],distribution=path.join(pythonRoot,`cpython-${CHANNEL_PYTHON_VERSION}-fixture`);await mkdir(distribution);await fixtureSymlink(distribution,path.join(pythonRoot,'cpython-version-alias'),process.platform==='win32'?'junction':'dir');return {stdout:''};}
     if(args[0]==='-I')return {stdout:CHANNEL_PYTHON_VERSION+'\n'+process.platform+'\n64\n'+process.arch+'\n'};
     if(args.includes('pip')){const target=args[args.indexOf('--target')+1];await mkdir(target);await writeFile(path.join(target,'current'),'new');return {stdout:''};}
     throw Error('unexpected command');

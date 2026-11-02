@@ -1,3 +1,4 @@
+import {assertPrivatePermissions} from './fixtures/permissions.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {createRequire} from 'node:module';
@@ -50,7 +51,7 @@ test('desktop state survives concurrent updates and corrupt-file recovery with p
     await Promise.all(Array.from({length:20},(_,i)=>store.save({locale:i%2?'zh-CN':'en',bounds:{x:i,y:25,width:900,height:700}})));
     await store.flush();
     assert.equal(new DesktopStateStore(file).read().bounds.x,19);
-    assert.equal((await stat(file)).mode&0o777,0o600);
+    assertPrivatePermissions(file,0o600);
     await writeFile(file,'{truncated');
     assert.deepEqual(new DesktopStateStore(file).read(),{});
     await store.save({locale:'en'});
@@ -95,7 +96,7 @@ test('native menu actions route to the renderer while standard editing retains m
 test('the actual main-process IPC handlers authorize every invocation before performing native work',async()=>{
   const handlers=new Map();
   const app=new EventEmitter();
-  Object.assign(app,{setName(){},getPath(){return tmpdir();},setPath(){},requestSingleInstanceLock(){return true;},whenReady(){return new Promise(()=>{});},getVersion(){return 'test';},setAboutPanelOptions(){}});
+  Object.assign(app,{setName(){},setAppUserModelId(){},getPath(){return tmpdir();},setPath(){},requestSingleInstanceLock(){return true;},whenReady(){return new Promise(()=>{});},getVersion(){return 'test';},setAboutPanelOptions(){}});
   let folderCalls=0,findCalls=0;
   const electron={app,ipcMain:{handle:(name,fn)=>handlers.set(name,fn)},dialog:{showOpenDialog:async()=>{folderCalls++;return{canceled:false,filePaths:['/selected/project']};}},Menu:{buildFromTemplate:template=>template,setApplicationMenu(){}},screen:{},BrowserWindow:class{},shell:{}};
   const scopedRequire=createRequire(new URL('../desktop/main.cjs',import.meta.url));
@@ -141,7 +142,7 @@ test('preload subscriptions expose payloads without privileged IPC events and ca
 test('native quit saves renderer state before one host shutdown; reload keeps the engine alive',async()=>{
   async function harness({dirty=false,running=false,answer=1}={}) {
     const steps=[],messages=[];const handlers=new Map();const app=new EventEmitter();
-    Object.assign(app,{setName(){},getPath(){return tmpdir();},setPath(){},requestSingleInstanceLock(){return true;},whenReady(){return new Promise(()=>{});},getVersion(){return 'test';},setAboutPanelOptions(){},quit(){steps.push('quit');},exit(){steps.push('exit');}});
+    Object.assign(app,{setName(){},setAppUserModelId(){},getPath(){return tmpdir();},setPath(){},requestSingleInstanceLock(){return true;},whenReady(){return new Promise(()=>{});},getVersion(){return 'test';},setAboutPanelOptions(){},quit(){steps.push('quit');},exit(){steps.push('exit');}});
     const electron={app,ipcMain:{handle:(name,fn)=>handlers.set(name,fn)},dialog:{showMessageBox:async()=>{steps.push('confirm');return{response:answer};}},Menu:{buildFromTemplate:value=>value,setApplicationMenu(){}},screen:{},BrowserWindow:class{},shell:{}};
     const scopedRequire=createRequire(new URL('../desktop/main.cjs',import.meta.url));
     const source=await readFile(new URL('../desktop/main.cjs',import.meta.url),'utf8');

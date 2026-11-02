@@ -1,3 +1,4 @@
+import {fixtureSymlink} from './fixtures/fs-platform.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtemp, mkdir, writeFile, readFile, symlink, rm } from 'node:fs/promises';
@@ -45,7 +46,7 @@ test('literal POSIX filename drafts survive actual authenticated HTTP and a diff
 test('allowing literal filename characters does not allow traversal, external aliases or unknown projects', async () => {
   const root = await mkdtemp(path.join(tmpdir(), 'dsh-draft-paths-boundary-')); let host;
   try {
-    const projectPath = path.join(root, 'project'), outside = path.join(root, 'outside'); await mkdir(projectPath); await mkdir(outside); await writeFile(path.join(outside, 'external.md'), 'preserve'); await symlink(outside, path.join(projectPath, 'link'));
+    const projectPath = path.join(root, 'project'), outside = path.join(root, 'outside'); await mkdir(projectPath); await mkdir(outside); await writeFile(path.join(outside, 'external.md'), 'preserve'); await fixtureSymlink(outside, path.join(projectPath, 'link'));
     host = await startHost({ dataDir: path.join(root, 'data'), autoStart: false }); const api = await connection(host), project = (await api('projects', { path: projectPath })).body;
     const draft = { projectId: project.id, version: 'a'.repeat(64), content: 'must not escape' };
     for (const name of ['../outside/external.md', 'link/external.md']) assert.equal((await api('document-drafts/save', { ...draft, path: name })).body.code, 'OUTSIDE_PROJECT');

@@ -1,3 +1,5 @@
+import {assertPrivatePermissions} from './fixtures/permissions.mjs';
+import {fixtureSymlink} from './fixtures/fs-platform.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import promises, { mkdtemp, writeFile, symlink, rm, mkdir, readdir, stat } from 'node:fs/promises';
@@ -11,7 +13,7 @@ test('project access rejects traversal and external symlinks; stale edits cannot
     const project=path.join(root,'project');await mkdir(project);
     await writeFile(path.join(root,'outside.txt'),'outside');
     await writeFile(path.join(project,'inside.md'),'first');
-    await symlink(path.join(root,'outside.txt'),path.join(project,'alias.txt'));
+    await fixtureSymlink(path.join(root,'outside.txt'),path.join(project,'alias.txt'));
     await assert.rejects(readProjectFile(project,'../outside.txt'),/OUTSIDE_PROJECT/);
     await assert.rejects(readProjectFile(project,'alias.txt'),/OUTSIDE_PROJECT/);
     await assert.rejects(writeProjectFile(project,'../outside.txt','overwrite','ignored'),/OUTSIDE_PROJECT/);
@@ -28,7 +30,7 @@ test('concurrent saves through canonical aliases accept one base version once an
   const root=await mkdtemp(path.join(tmpdir(),'dsh-client-file-cas-'));
   try {
     await writeFile(path.join(root,'document.md'),'original',{mode:0o600});
-    await symlink(path.join(root,'document.md'),path.join(root,'alias.md'));
+    await fixtureSymlink(path.join(root,'document.md'),path.join(root,'alias.md'));
     const base=await readProjectFile(root,'document.md');
     const contents=['first concurrent save','second concurrent save'];
     const results=await Promise.allSettled([
@@ -41,7 +43,7 @@ test('concurrent saves through canonical aliases accept one base version once an
     const winner=results.findIndex(result=>result.status==='fulfilled');
     const saved=await readProjectFile(root,'document.md');
     assert.equal(saved.content,contents[winner]);
-    assert.equal((await stat(path.join(root,'document.md'))).mode&0o777,0o600);
+    assertPrivatePermissions(path.join(root,'document.md'),0o600);
     assert.deepEqual((await readdir(root)).filter(name=>name.endsWith('.tmp')),[]);
     await writeProjectFile(root,'alias.md','saved after conflict',saved.version);
     assert.equal((await readProjectFile(root,'document.md')).content,'saved after conflict');

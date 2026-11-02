@@ -1,14 +1,15 @@
+import {fixtureSymlink} from './fixtures/fs-platform.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {mkdtemp,mkdir,writeFile,readFile,symlink,rm} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import path from 'node:path';
 import {ResourceLibrary,listResources,createResource,resourceKey} from '../server/resource-library.mjs';
-async function setup(t){const root=await mkdtemp(path.join(tmpdir(),'dsh-library-test-'));t.after(()=>rm(root,{recursive:true,force:true}));const project={id:'a',path:path.join(root,'project')};await mkdir(project.path);return {root,project};}
+async function setup(t){const root=await mkdtemp(path.join(tmpdir(),'dsh-library-test-'));const close=[];t.after(async()=>{for(const fn of close)await fn();await rm(root,{recursive:true,force:true});});const project={id:'a',path:path.join(root,'project')};await mkdir(project.path);return {root,project,close};}
 test('inventory classifies nested resources without traversing symlinks or hidden/generated directories',async t=>{
  const {root,project}=await setup(t);for(const name of ['notes','node_modules','.hidden'])await mkdir(path.join(project.path,name));await mkdir(path.join(root,'outside'));
  for(const name of ['notes/guide.md','slides.pptx','site.html','cover.png','data.csv','node_modules/ignored.md','.hidden/private.md'])await writeFile(path.join(project.path,name),'fixture');
- await writeFile(path.join(root,'outside','secret.md'),'secret');await symlink(path.join(root,'outside'),path.join(project.path,'linked'));await symlink(project.path,path.join(project.path,'cycle'));await symlink(path.join(root,'outside','secret.md'),path.join(project.path,'secret.md'));
+ await writeFile(path.join(root,'outside','secret.md'),'secret');await fixtureSymlink(path.join(root,'outside'),path.join(project.path,'linked'));await fixtureSymlink(project.path,path.join(project.path,'cycle'));await fixtureSymlink(path.join(root,'outside','secret.md'),path.join(project.path,'secret.md'));
  const result=await listResources([project]);assert.equal(result.entries.length,5);assert.deepEqual(new Set(result.entries.map(row=>row.kind)),new Set(['pages','slides','sites','images','other']));assert.ok(result.entries.every(row=>row.projectId==='a'&&Number.isFinite(Date.parse(row.modifiedAt))));assert.equal(result.truncated,false);
 });
 test('inventory reports unavailable projects, bounded traversal and cancellation',async t=>{
@@ -30,12 +31,12 @@ test('creation rejects traversal, hidden names and symlink overwrite; concurrent
  const {root,project}=await setup(t),result=await createResource(project,'项目笔记');assert.equal(result.path,'项目笔记.md');assert.equal(await readFile(path.join(project.path,result.path),'utf8'),'# 项目笔记\n\n');
  await assert.rejects(createResource(project,'项目笔记'),{code:'LIBRARY_FILE_EXISTS'});
  for(const name of ['../escape','/escape','a/b','a\\b','.hidden','bad\nname',' '])await assert.rejects(createResource(project,name),{code:'LIBRARY_NAME_INVALID'});
- const outside=path.join(root,'outside.md');await writeFile(outside,'keep');await symlink(outside,path.join(project.path,'link.md'));await assert.rejects(createResource(project,'link.md'));assert.equal(await readFile(outside,'utf8'),'keep');
+ const outside=path.join(root,'outside.md');await writeFile(outside,'keep');await fixtureSymlink(outside,path.join(project.path,'link.md'));await assert.rejects(createResource(project,'link.md'));assert.equal(await readFile(outside,'utf8'),'keep');
  const results=await Promise.allSettled([createResource(project,'race'),createResource(project,'race')]);assert.equal(results.filter(row=>row.status==='fulfilled').length,1);
 });
 test('HTTP routes enforce capability/project boundaries and return scoped inventories',async t=>{
- const {root,project}=await setup(t);const {startHost}=await import('../server/index.mjs');await mkdir(path.join(root,'global'));
- const host=await startHost({dataDir:path.join(root,'data'),autoStart:false,instructionOptions:{globalRoot:path.join(root,'global')}});t.after(()=>host.close());
+ const {root,project,close}=await setup(t);const {startHost}=await import('../server/index.mjs');await mkdir(path.join(root,'global'));
+ const host=await startHost({dataDir:path.join(root,'data'),autoStart:false,instructionOptions:{globalRoot:path.join(root,'global')}});close.push(()=>host.close());
  const response=await fetch(host.url+'/api/bootstrap'),boot=await response.json();const headers={cookie:response.headers.get('set-cookie').split(';')[0],'x-dsh-capability':boot.capability,'content-type':'application/json'};
  const request=async(route,body)=>{const result=await fetch(host.url+'/api/'+route,{headers,method:body===undefined?'GET':'POST',body:body===undefined?undefined:JSON.stringify(body)});return {status:result.status,data:await result.json()};};
  const saved=await request('projects',{path:project.path,name:'Library fixture'});assert.equal(saved.status,200);const projectId=saved.data.id;

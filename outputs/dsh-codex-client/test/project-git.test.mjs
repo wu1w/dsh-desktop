@@ -1,6 +1,9 @@
+import {fixtureSymlink} from './fixtures/fs-platform.mjs';
+process.env.GIT_CONFIG_NOSYSTEM='1';process.env.GIT_CONFIG_GLOBAL='/dev/null';
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { execFile, spawn } from 'node:child_process';
+import childProcess, { execFile, spawn } from 'node:child_process';
+import {syncBuiltinESMExports} from 'node:module';
 import { promisify } from 'node:util';
 import { mkdtemp, mkdir, writeFile, readFile, rm, symlink, chmod, stat } from 'node:fs/promises';
 import path from 'node:path';
@@ -29,7 +32,7 @@ async function modifiedRepository() {
   await writeFile(path.join(root, 'tracked.txt'), 'staged\n'); await git(root, 'add', '--', 'tracked.txt');
   await writeFile(path.join(root, 'tracked.txt'), 'working\n');
   await git(root, 'mv', '--', 'rename old.txt', 'rename new.txt'); await rm(path.join(root, 'deleted.txt'));
-  for (const name of ['space name.txt', 'line\nbreak.txt', '-leading-dash.txt', '   ', '中文.txt']) await writeFile(path.join(root, name), 'new content\n');
+  for (const name of ['space name.txt', (process.platform==='win32'?'line 中文 break.txt':'line\nbreak.txt'), '-leading-dash.txt', (process.platform==='win32'?'space ;$[].txt':'   '), '中文.txt']) await writeFile(path.join(root, name), 'new content\n');
   return root;
 }
 async function waitMarker(file) {
@@ -53,7 +56,7 @@ test('real porcelain -z status preserves unusual paths, staged/worktree states, 
     const renamed = state.files.find(item => item.path === 'rename new.txt');
     assert.equal(renamed.originalPath, 'rename old.txt'); assert.equal(renamed.renamed, true); assert.equal(renamed.staged, true);
     assert.equal(state.files.find(item => item.path === 'deleted.txt').deleted, true);
-    for (const name of ['space name.txt', 'line\nbreak.txt', '-leading-dash.txt', '   ', '中文.txt']) assert.equal(state.files.find(item => item.path === name).untracked, true, name);
+    for (const name of ['space name.txt', (process.platform==='win32'?'line 中文 break.txt':'line\nbreak.txt'), '-leading-dash.txt', (process.platform==='win32'?'space ;$[].txt':'   '), '中文.txt']) assert.equal(state.files.find(item => item.path === name).untracked, true, name);
     assert.deepEqual(await readFile(path.join(root, '.git/index')), before.bytes);
     assert.equal((await stat(path.join(root, '.git/index'))).mtimeMs, before.info.mtimeMs);
   } finally { await reader.close(); await rm(root, { recursive: true, force: true }); }
@@ -65,7 +68,7 @@ test('real diff separates staged, unstaged and untracked changes and retains ren
     const staged = await reader.diff(root, { path: 'tracked.txt', staged: true });
     assert.match(staged.diff, /\+staged/); assert.doesNotMatch(staged.diff, /\+working/);
     const working = await reader.diff(root, { path: 'tracked.txt' }); assert.match(working.diff, /-staged\n\+working/);
-    for (const relative of ['space name.txt', 'line\nbreak.txt', '-leading-dash.txt', '   ']) {
+    for (const relative of ['space name.txt', (process.platform==='win32'?'line 中文 break.txt':'line\nbreak.txt'), '-leading-dash.txt', (process.platform==='win32'?'space ;$[].txt':'   ')]) {
       const added = await reader.diff(root, { path: relative }); assert.equal(added.kind, 'untracked'); assert.match(added.diff, /\+new content/);
     }
     assert.equal((await reader.diff(root, { path: 'space name.txt', staged: true })).diff, '');
@@ -81,12 +84,12 @@ test('real diff separates staged, unstaged and untracked changes and retains ren
 test('repository and path checks refuse parent repositories, traversal, metadata and escaped symlinks', async () => {
   const root = await repository(), outside = await mkdtemp(path.join(tmpdir(), 'dsh-git-outside-')), reader = new ProjectGit();
   try {
-    await mkdir(path.join(root, 'nested')); await writeFile(path.join(outside, 'private'), 'outside data'); await symlink(outside, path.join(root, 'escape'));
+    await mkdir(path.join(root, 'nested')); await writeFile(path.join(outside, 'private'), 'outside data'); await fixtureSymlink(outside, path.join(root, 'escape'));
     await assert.rejects(reader.status(outside), { code: 'GIT_NOT_REPOSITORY' });
     await assert.rejects(reader.status(path.join(root, 'nested')), { code: 'GIT_PROJECT_ROOT_REQUIRED' });
     for (const relative of ['', null, '../private', '/etc/passwd', '.git/config', 'nested/../tracked.txt', 'tracked.txt\0x', '\ud800']) await assert.rejects(reader.diff(root, { path: relative }), { code: 'GIT_INVALID_PATH' });
     await assert.rejects(reader.diff(root, { path: 'escape/private' }), { code: 'GIT_OUTSIDE_PROJECT' });
-    await symlink(path.join(outside, 'private'), path.join(root, 'external-untracked'));
+    await fixtureSymlink(path.join(outside, 'private'), path.join(root, 'external-untracked'));
     await assert.rejects(reader.diff(root, { path: 'external-untracked' }), { code: 'GIT_OUTSIDE_PROJECT' });
     await assert.rejects(reader.diff(root, { path: 'nested' }), { code: 'GIT_INVALID_PATH' });
     await assert.rejects(reader.diff(root, { path: 'does-not-exist' }), { code: 'GIT_INVALID_PATH' });
@@ -133,7 +136,8 @@ test('clean and process filter sentinels execute in raw Git but stay disabled in
     for (const driver of ['clean', 'process']) {
       const marker = path.join(root, 'ran-' + driver), helper = path.join(root, 'filter-' + driver);
       await writeFile(helper, `#!${process.execPath}\nrequire('node:fs').writeFileSync(${JSON.stringify(marker)},'executed');${driver === 'clean' ? 'process.stdin.pipe(process.stdout);' : ''}\n`); await chmod(helper, 0o700);
-      await git(root, 'config', 'filter.evil.' + driver, "'" + helper.replaceAll("'", "'\\''") + "'");
+      const quote=value=>"'"+value.replaceAll("'","'\\''")+"'";
+      await git(root, 'config', 'filter.evil.' + driver, (process.platform==='win32'?quote(process.execPath.replaceAll('\\','/'))+' ':'')+quote(helper.replaceAll('\\','/')));
       await git(root, 'diff', '--no-ext-diff', '--no-textconv', '--', 'tracked.txt').catch(() => {});
       assert.equal(await readFile(marker, 'utf8'), 'executed', driver + ' control must actually exercise its helper');
       await rm(marker);
@@ -173,7 +177,7 @@ test('missing Git, deadline and explicit cancellation leave no running owned pro
     const marker = path.join(root, 'pid'), binary = await fakeGit(root, `process.on('SIGTERM',()=>{});require('node:fs').writeFileSync(${JSON.stringify(marker)},String(process.pid));setInterval(()=>{},1000);`);
     for (const mode of ['deadline', 'abort', 'close']) {
       await rm(marker, { force: true });
-      const reader = new ProjectGit({ gitBinary: binary, timeoutMs: mode === 'deadline' ? 800 : 30000, killGraceMs: 30 }), controller = new AbortController();
+      const reader = new ProjectGit({ gitBinary: process.platform==='win32'?process.execPath:binary, gitArgs:process.platform==='win32'?[binary]:[], timeoutMs: mode === 'deadline' ? 800 : 30000, killGraceMs: 30 }), controller = new AbortController();
       const result = reader.status(root, { signal: controller.signal }).then(() => null, error => error);
       const pid = await waitMarker(marker); if (mode === 'abort') controller.abort();
       if (mode === 'close') { const closing = reader.close(); assert.equal(reader.close(), closing); await closing; await assert.rejects(reader.status(root), { code: 'GIT_ABORTED' }); }
@@ -183,7 +187,7 @@ test('missing Git, deadline and explicit cancellation leave no running owned pro
   } finally { await missing.close(); await rm(root, { recursive: true, force: true }); }
 });
 
-test('real Cordis plugin disable aborts in-flight reads, unregisters routes and can re-enable', async () => {
+test('real Cordis plugin disable aborts in-flight reads, unregisters routes and can re-enable', async t => {
   const root = await repository(), context = new Context(); let host;
   const originalPath = process.env.PATH;
   try {
@@ -192,6 +196,15 @@ test('real Cordis plugin disable aborts in-flight reads, unregisters routes and 
     const environment = () => ({ segments: ['projects', 'owned', 'git', 'status'], request: Object.assign(new EventEmitter(), { method: 'GET' }), response: Object.assign(new EventEmitter(), { writableFinished: false }), url: new URL('http://127.0.0.1/api/projects/owned/git/status'), json: value => value });
     assert.equal(await host.dispatch(environment()), true);
     const marker = path.join(root, 'plugin-pid'), binary = await fakeGit(root, `process.on('SIGTERM',()=>{});require('node:fs').writeFileSync(${JSON.stringify(marker)},String(process.pid));setInterval(()=>{},1000);`);
+    if(process.platform==='win32'){
+      const native=childProcess.spawn;
+      t.mock.method(childProcess,'spawn',(file,args,options)=>{
+        // Windows cannot execute a POSIX shebang. Retain the real Job owner and
+        // child process while substituting only this test's fake Git executable.
+        if(process.env.PATH.startsWith(path.dirname(binary)+path.delimiter)&&file.endsWith('dsh-windows-job.exe'))args=[...args.slice(0,2),process.execPath,binary,...args.slice(3)];
+        return native(file,args,options);
+      });syncBuiltinESMExports();t.after(()=>{t.mock.restoreAll();syncBuiltinESMExports();});
+    }
     process.env.PATH = path.dirname(binary) + path.delimiter + originalPath;
     const disconnected = environment();
     const cancelled = host.dispatch(disconnected).then(() => null, error => error); const cancelledPid = await waitMarker(marker);

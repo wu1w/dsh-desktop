@@ -20,3 +20,16 @@ let result;for(let n=0;n<150;n++){result=manager.read('package-probe',row.id);if
 await manager.close();clearTimeout(timeout);if(result.status!=='exited'||result.exitCode!==0||!JSON.stringify(result).includes('DSH_PTY_OK'))process.exit(3);console.log('DSH_WINDOWS_PTY_PROBE_OK');process.exit(0);
 }catch(error){console.error(error.code||error.message);process.exit(4);}`;
 }
+
+// macOS-only runtime acceptance. Immediate UTF-8 input is tested, not assumed
+// broken: a Mac-built package cannot pass its gate if the real PTY loses it.
+export function macosPtyProbeSource(root,home){
+ return `import {ProjectPtyManager} from ${JSON.stringify(pathToFileURL(path.join(root,'server/project-pty.mjs')).href)};
+const manager=new ProjectPtyManager();const watchdog=setTimeout(()=>process.exit(2),20000);
+try{const row=await manager.create({projectId:'package-probe',cwd:${JSON.stringify(home)}});
+await manager.write('package-probe',row.id,${JSON.stringify("printf 'DSH_MAC_PTY_UTF8_终端\\n'; exit 0\r")});
+let result;for(let n=0;n<150;n++){result=manager.read('package-probe',row.id);if(result.status==='exited')break;await new Promise(resolve=>setTimeout(resolve,100));}
+await manager.close();clearTimeout(watchdog);if(result.status!=='exited'||result.exitCode!==0||result.cleanupPending||!result.output.includes('DSH_MAC_PTY_UTF8_终端'))process.exit(3);
+console.log('DSH_MACOS_PTY_PROBE_OK');process.exit(0);
+}catch(error){console.error(error.code||error.message);process.exit(4);}`;
+}

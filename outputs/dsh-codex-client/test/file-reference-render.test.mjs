@@ -1,3 +1,4 @@
+import {fileURLToPath} from 'node:url';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {readFile} from 'node:fs/promises';
@@ -43,7 +44,7 @@ test('actual SSR exposes accessible file buttons and preserves literal code and 
 });
 
 const timelineFile=new URL('../src/transcript-timeline.jsx',import.meta.url),timelineModule={exports:{}};
-const timelineBundle=await build({entryPoints:[timelineFile.pathname],bundle:true,write:false,platform:'node',format:'cjs',external:['react','react-dom','react/jsx-runtime','lucide-react']});
+const timelineBundle=await build({entryPoints:[fileURLToPath(timelineFile)],bundle:true,write:false,platform:'node',format:'cjs',external:['react','react-dom','react/jsx-runtime','lucide-react']});
 const timelineReact={...React,useState:initial=>[typeof initial==='function'?initial():initial,()=>{}],useId:()=>':test:',useEffect(){}};
 new Function('require','module','exports',timelineBundle.outputFiles[0].text)(id=>id==='react'?timelineReact:createRequire(timelineFile)(id),timelineModule,timelineModule.exports);
 const panelFile=new URL('../src/agent-panel.jsx',import.meta.url),panelCode=await transform(await readFile(panelFile,'utf8'),{loader:'jsx',format:'cjs'}),panelRequire=createRequire(panelFile);

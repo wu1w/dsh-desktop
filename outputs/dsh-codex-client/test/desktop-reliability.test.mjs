@@ -42,7 +42,7 @@ test('long network backoff and engine restart keep the sleep guard until recover
 });
 test('actual desktop crash recovery reloads only the renderer, preserves dirty recovery state and cancels on close',async()=>{
   const app=new EventEmitter(),clock=clockFixture();let reloads=0,dialogs=0,hostCloses=0,win;
-  Object.assign(app,{setName(){},getPath(){return '/tmp';},setPath(){},requestSingleInstanceLock(){return true;},whenReady(){return new Promise(()=>{});}});
+  Object.assign(app,{setName(){},setAppUserModelId(){},getPath(){return '/tmp';},setPath(){},requestSingleInstanceLock(){return true;},whenReady(){return new Promise(()=>{});}});
   class Window extends EventEmitter{
     constructor(){super();win=this;this.webContents=new EventEmitter();Object.assign(this.webContents,{setWindowOpenHandler(){},session:Object.assign(new EventEmitter(),{setPermissionRequestHandler(){},setPermissionCheckHandler(){}})});}
     isDestroyed(){return false;}async loadURL(){}reload(){reloads++;}

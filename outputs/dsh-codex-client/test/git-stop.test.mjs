@@ -1,3 +1,5 @@
+import {assertPrivatePermissions} from './fixtures/permissions.mjs';
+process.env.GIT_CONFIG_NOSYSTEM='1';process.env.GIT_CONFIG_GLOBAL='/dev/null';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import promises, { mkdtemp, realpath, mkdir, writeFile, readFile, readdir, stat, chmod, rm } from 'node:fs/promises';
@@ -30,13 +32,13 @@ async function noGitLocks(root) { assert.ok(!(await readdir(path.join(root, '.gi
 test('reader close waits for a real TERM-ignoring owned Git process to die', async () => temporary(async root => {
   const marker = path.join(root, 'pid'), binary = path.join(root, 'fake-git');
   await writeFile(binary, `#!${process.execPath}\nprocess.on('SIGTERM',()=>{});const fs=require('node:fs'),marker=${JSON.stringify(marker)};fs.writeFileSync(marker+'.tmp',String(process.pid));fs.renameSync(marker+'.tmp',marker);setInterval(()=>{},1000);\n`); await chmod(binary, 0o700);
-  const reader = new ProjectGit({ gitBinary: binary, killGraceMs: 25, closeTimeoutMs: 1000 });
+  const reader = new ProjectGit({ gitBinary: process.platform==='win32'?process.execPath:binary, gitArgs:process.platform==='win32'?[binary]:[], killGraceMs: 25, closeTimeoutMs: 1000 });
   try {
     const pending = reader.status(root).then(() => null, error => error); let pid;
     // Existence alone can observe an empty file, whose Number is 0 (our own
     // process group). Publish atomically and only probe the owned child PID.
     await until(async()=>{const value=await readFile(marker,'utf8').catch(()=>'');if(!/^[1-9]\d*$/.test(value))return false;const candidate=Number(value);if(!Number.isSafeInteger(candidate)||candidate<=1)return false;pid=candidate;return true;});
-    assert.equal([...reader.children][0]?.pid,pid); assert.equal(alive(pid), true); assert.equal(reader.activities().length, 1); const id = reader.activities()[0].id;
+    const owner=[...reader.children][0]?.pid;assert.ok(owner>1);if(process.platform!=='win32')assert.notEqual(owner,pid,'supervisor and owned Git process have distinct lifetimes');assert.equal(alive(owner),true);assert.equal(alive(pid), true); assert.equal(reader.activities().length, 1); const id = reader.activities()[0].id;
     await reader.close(); assert.equal((await pending).code, 'GIT_ABORTED'); assert.equal(alive(pid), false,`owned Git leader ${pid} remained alive after close`); assert.equal(reader.children.size, 0); assert.equal(reader.operations.size, 0); assert.deepEqual(reader.activities(), []); assert.ok(id.startsWith('git-'));
   } finally { await reader.close(); }
 }));
@@ -86,7 +88,7 @@ test('draft close joins admitted fsync/rename and reports an in-flight storage f
     assert.equal((await pending).code, 'GIT_DRAFT_WRITE_FAILED'); assert.equal(store.closed, false); assert.equal(store.activities()[0].kind, 'unknown');
     await assert.rejects(store.close(), { code: 'GIT_DRAFT_WRITE_FAILED' }); assert.equal((await store.get('project')).message, first.message);
     failing = false; const saved = await store.save(draft(first.version, 'explicit retry saved')); await store.close();
-    const reopened = new GitDraftStore({ dataDir: root }); assert.deepEqual(await reopened.get('project'), saved); await reopened.close(); assert.deepEqual(store.activities(), []); assert.equal((await stat(path.join(root, 'git-drafts.json'))).mode & 0o777, 0o600); assert.ok(!(await readdir(root)).some(name => name.endsWith('.tmp') || name === '.git-drafts.lock'));
+    const reopened = new GitDraftStore({ dataDir: root }); assert.deepEqual(await reopened.get('project'), saved); await reopened.close(); assert.deepEqual(store.activities(), []); assertPrivatePermissions(path.join(root, 'git-drafts.json'),0o600); assert.ok(!(await readdir(root)).some(name => name.endsWith('.tmp') || name === '.git-drafts.lock'));
   } finally { gate.resolve(); failing = false; intercept?.mock.restore(); syncBuiltinESMExports(); if (store.stopFailures.size) { const row = await store.get('project'); await store.save(draft(row?.version ?? null, 'cleanup retry')); } await store.close(); }
 }));
 

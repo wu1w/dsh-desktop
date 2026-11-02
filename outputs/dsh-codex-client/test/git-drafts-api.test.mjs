@@ -46,7 +46,7 @@ test('acknowledged HTTP draft survives host SIGKILL and native data-lock stale r
  const {directory,dataDir,project}=await setup();let child,host;
  try{
   const entry=appRoot?path.join(appRoot,'server/index.mjs'):fileURLToPath(new URL('../server/index.mjs',import.meta.url));
-  const source=`import{startHost}from ${JSON.stringify(entry)};const h=await startHost({dataDir:${JSON.stringify(dataDir)},autoStart:false});process.stdout.write(h.url+'\\n');`;
+  const source=`import{startHost}from ${JSON.stringify(pathToFileURL(entry).href)};const h=await startHost({dataDir:${JSON.stringify(dataDir)},autoStart:false});process.stdout.write(h.url+'\\n');`;
   child=spawn(process.execPath,['--input-type=module','-e',source],{env:{PATH:process.env.PATH,HOME:process.env.HOME},stdio:['ignore','pipe','pipe']});let stdout='';child.stdout.on('data',bytes=>stdout+=bytes.toString());
   for(let i=0;i<200&&!stdout.includes('\n');i++)await new Promise(resolve=>setTimeout(resolve,10));assert.ok(stdout.includes('\n'));
   const c=await client({url:stdout.trim()}),projectId=(await c.api('projects',{path:project})).id;

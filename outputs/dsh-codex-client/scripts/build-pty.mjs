@@ -6,6 +6,7 @@ import { fileURLToPath } from 'node:url';
 const run = promisify(execFile);
 export async function buildPtyHelper({ appRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..') } = {}) {
   // Windows 上没有 POSIX PTY 辅助程序；跳过而不是中断整个构建。
+  if(process.platform==='win32'){const {buildWindowsJobHelper}=await import('./build-windows-job.mjs');return buildWindowsJobHelper({appRoot});}
   if (process.platform !== 'darwin') return null;
   const target = path.join(appRoot,'native/bin/dsh-pty-helper');
   await mkdir(path.dirname(target),{recursive:true});

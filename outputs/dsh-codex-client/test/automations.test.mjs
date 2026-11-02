@@ -1,3 +1,5 @@
+import {assertPrivatePermissions} from './fixtures/permissions.mjs';
+import {fixtureSymlink} from './fixtures/fs-platform.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtemp, mkdir, readFile, writeFile, rm, stat, readdir, symlink, copyFile } from 'node:fs/promises';
@@ -29,8 +31,8 @@ test('new tasks are paused, validate execution settings and schedules, and persi
     }
     const { automation } = await current.scheduler.create(task());
     assert.equal(automation.enabled, false); assert.equal(automation.nextRunAt, null); assert.equal(automation.lastStatus, 'never'); assert.deepEqual(automation.runs, []);
-    assert.equal(current.clock.timers.size, 0); assert.equal((await stat(path.join(current.directory, 'automations.json'))).mode & 0o777, 0o600);
-    assert.equal((await stat(current.directory)).mode & 0o777, 0o700);
+    assert.equal(current.clock.timers.size, 0); assertPrivatePermissions(path.join(current.directory, 'automations.json'),0o600);
+    assertPrivatePermissions(current.directory,0o700);
     const disk = JSON.parse(await readFile(path.join(current.directory, 'automations.json'), 'utf8'));
     assert.equal(disk.version, 1); assert.equal(disk.automations[0].id, automation.id); assert.equal('apiKey' in disk.automations[0], false);
     assert.equal((await readdir(current.directory)).some(name => name.endsWith('.tmp')), false);
@@ -177,7 +179,7 @@ test('a second owner cannot schedule the same file and symlink state is refused'
   const second = new AutomationScheduler({ dataDir: current.directory, getProject: () => ({}), runAutomation: async () => ({ status: 'completed' }) });
   try { await assert.rejects(second.start(), { code: 'AUTOMATION_LOCKED' }); }
   finally { await second.close(); await current.close(); }
-  const directory = await mkdtemp(path.join(tmpdir(), 'dsh-automation-symlink-')); await writeFile(path.join(directory, 'outside'), 'private'); await symlink(path.join(directory, 'outside'), path.join(directory, 'automations.json'));
+  const directory = await mkdtemp(path.join(tmpdir(), 'dsh-automation-symlink-')); await writeFile(path.join(directory, 'outside'), 'private'); await fixtureSymlink(path.join(directory, 'outside'), path.join(directory, 'automations.json'));
   const scheduler = new AutomationScheduler({ dataDir: directory, getProject: () => ({}), runAutomation: async () => ({ status: 'completed' }) });
   try { await assert.rejects(scheduler.start(), { code: 'AUTOMATION_STORAGE_UNSAFE' }); assert.equal(await readFile(path.join(directory, 'outside'), 'utf8'), 'private'); }
   finally { await scheduler.close(); await rm(directory, { recursive: true, force: true }); }

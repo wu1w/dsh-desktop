@@ -246,15 +246,25 @@ class Bridge:
 async def main():
     bridge = Bridge()
     loop = asyncio.get_running_loop()
-    reader = asyncio.StreamReader(limit=MAX_LINE)
-    transport, _ = await loop.connect_read_pipe(lambda: asyncio.StreamReaderProtocol(reader), sys.stdin)
+    transport = None
     stopping = asyncio.Event()
-    for signum in (signal.SIGTERM, signal.SIGINT):
-        loop.add_signal_handler(signum, stopping.set)
+    if sys.platform == 'win32':
+        # Node supplies synchronous anonymous pipes on Windows. Proactor pipe
+        # registration and Unix signal handlers are unsupported for these stdin
+        # handles. A bounded background read keeps adapters asynchronous; the
+        # owning Node process closes stdin to request a graceful shutdown.
+        async def read_line():
+            return await asyncio.to_thread(sys.stdin.buffer.readline, MAX_LINE + 1)
+    else:
+        reader = asyncio.StreamReader(limit=MAX_LINE)
+        transport, _ = await loop.connect_read_pipe(lambda: asyncio.StreamReaderProtocol(reader), sys.stdin)
+        read_line = reader.readline
+        for signum in (signal.SIGTERM, signal.SIGINT):
+            loop.add_signal_handler(signum, stopping.set)
     emit({'event': 'ready', 'protocol': 1})
     try:
         while not stopping.is_set():
-            line_task = asyncio.create_task(reader.readline())
+            line_task = asyncio.create_task(read_line())
             stop_task = asyncio.create_task(stopping.wait())
             done, pending = await asyncio.wait([line_task, stop_task], return_when=asyncio.FIRST_COMPLETED)
             for task in pending:
@@ -264,6 +274,8 @@ async def main():
             line = line_task.result()
             if not line:
                 break
+            if len(line) > MAX_LINE:
+                raise RuntimeError('CHANNEL_PROTOCOL_LIMIT')
             request = json.loads(line)
             if request.get('method') == 'incoming/ack':
                 future = bridge.pending.get(request.get('id'))
@@ -280,7 +292,8 @@ async def main():
         try:
             await bridge.close()
         finally:
-            transport.close()
+            if transport is not None:
+                transport.close()
             for task in list(bridge.tasks):
                 task.cancel()
             await asyncio.gather(*list(bridge.tasks), return_exceptions=True)

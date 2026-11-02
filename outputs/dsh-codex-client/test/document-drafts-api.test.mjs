@@ -1,3 +1,4 @@
+import {fixtureSymlink} from './fixtures/fs-platform.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtemp, mkdir, readFile, writeFile, symlink, rm } from 'node:fs/promises';
@@ -50,7 +51,7 @@ test('draft APIs enforce actual project and symlink boundaries instead of trusti
   try {
     const projectDirectory = path.join(root, 'project'), outside = path.join(root, 'outside');
     await mkdir(projectDirectory); await mkdir(outside); await writeFile(path.join(outside, 'external.md'), 'preserve');
-    await symlink(outside, path.join(projectDirectory, 'linked'));
+    await fixtureSymlink(outside, path.join(projectDirectory, 'linked'));
     host = await startHost({ dataDir: path.join(root, 'owned'), autoStart: false }); const api = await client(host);
     const project = await api('projects', { path: projectDirectory, name: 'Bounded draft' });
     const draft = { projectId: project.id, path: 'linked/external.md', version: 'a'.repeat(64), content: 'must not save' };

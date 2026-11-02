@@ -1,4 +1,4 @@
-import { realpath, stat, readdir, open, writeFile, rename, mkdir, rm } from 'node:fs/promises';
+import { realpath, stat, lstat, readdir, open, writeFile, rename, mkdir, rm } from 'node:fs/promises';
 import { constants } from 'node:fs';
 import { createHash, randomUUID } from 'node:crypto';
 import path from 'node:path';
@@ -66,11 +66,17 @@ export async function readProjectFileInfo(root, relative) {
 }
 export async function readProjectFile(root, relative) {
   const target = await projectFile(root, relative);
+  const expected = await lstat(target,{bigint:true});
+  if (!expected.isFile() || expected.isSymbolicLink()) throw fileError('FILE_LIMIT');
   const handle = await open(target, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
   let bytes;
   try {
     const metadata = await handle.stat();
     if (!metadata.isFile() || metadata.size > MAX_TEXT_BYTES) throw fileError('FILE_LIMIT');
+    // Windows has no O_NOFOLLOW. Check the opened identity and canonical scope
+    // before reading any bytes, as well as checking again after the bounded read.
+    const openedIdentity=await handle.stat({bigint:true});
+    if (openedIdentity.dev !== expected.dev || openedIdentity.ino !== expected.ino || await projectFile(root, relative) !== target) throw fileError('FILE_CHANGED');
     const chunks = [];
     let length = 0;
     // Limit the reads themselves: a file that grows after fstat cannot make

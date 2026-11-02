@@ -1,3 +1,4 @@
+import {windowsShell,windowsCommandArgs,windowsEnvironment} from './windows-process.mjs';
 import { spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import path from 'node:path';
@@ -25,7 +26,7 @@ export class SystemOpener {
     this.spawn = spawnImpl;
     this.platform = platform;
     // Windows 没有 open/xdg-open，用 cmd 的 start；注意 start 首个参数是窗口标题。
-    this.command = platform === 'darwin' ? '/usr/bin/open' : platform === 'linux' ? 'xdg-open' : platform === 'win32' ? 'cmd.exe' : null;
+    this.command = platform === 'darwin' ? '/usr/bin/open' : platform === 'linux' ? 'xdg-open' : platform === 'win32' ? windowsShell() : null;
     this.timeoutMs = timeoutMs;
     this.maxConcurrent = maxConcurrent;
     this.killGraceMs = killGraceMs;
@@ -83,8 +84,8 @@ export class SystemOpener {
       };
       operation.cancel = () => stop('FILE_OPEN_CANCELLED');
       try {
-        const args = this.platform === 'win32' ? ['/c', 'start', '""', target] : [target];
-        const child = this.spawn(this.command, args, { stdio: ['ignore', 'ignore', 'pipe'], shell: false, windowsHide: true, env: launcherEnvironment() });
+        const args = this.platform === 'win32' ? windowsCommandArgs(this.command,"$ErrorActionPreference='Stop';[Diagnostics.Process]::Start([Diagnostics.ProcessStartInfo]@{FileName=[Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('"+Buffer.from(target,'utf8').toString('base64')+"'));UseShellExecute=$true})|Out-Null") : [target];
+        const child = this.spawn(this.command, args, { stdio: ['ignore', 'ignore', 'pipe'], shell: false, windowsHide: true, env:this.platform==='win32'?windowsEnvironment(process.env):launcherEnvironment() });
         operation.child = child;
         child.once('error', error => {
           const code = ['ENOENT', 'EACCES', 'EPERM'].includes(error?.code) ? 'FILE_OPEN_UNAVAILABLE' : 'FILE_OPEN_FAILED';

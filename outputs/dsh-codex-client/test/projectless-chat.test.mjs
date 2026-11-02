@@ -1,3 +1,5 @@
+import {assertPrivatePermissions} from './fixtures/permissions.mjs';
+import {fixtureSymlink} from './fixtures/fs-platform.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {mkdtemp,realpath,mkdir,writeFile,readFile,rm,stat,symlink} from 'node:fs/promises';
@@ -23,7 +25,7 @@ test('projectless chat keeps global memory and history through restart without i
  const f=await fixture(t),s=await f.api('sessions',{});assert.equal(s.projectId,null);assert.deepEqual((await f.api('state')).projects,[]);
  const first=await f.turn(s,'Remember the first conversation fact');assert.ok(first.items.some(i=>i.text==='A real saved answer'));
  assert.match(JSON.stringify(f.adapter.calls[0]),/GLOBAL_AGENT_ONE/);assert.match(JSON.stringify(f.adapter.calls[0]),/GLOBAL_MEMORY_ONE/);assert.doesNotMatch(JSON.stringify(f.adapter.calls[0]),/UNRELATED_ANCESTOR_SETTING/);
- const before=await f.host.engine.readSession(s.id),cwd=before.cwd;assert.ok(cwd.startsWith(path.join(f.dataDir,'chat-runtime')+path.sep));assert.equal((await stat(cwd)).mode&0o777,0o700);
+ const before=await f.host.engine.readSession(s.id),cwd=before.cwd;assert.ok(cwd.startsWith(path.join(f.dataDir,'chat-runtime')+path.sep));assertPrivatePermissions(cwd,0o700);
  await f.api('preferences',{selected:s.id,projectId:null,drafts:{[s.id]:'saved unsent thought'}});
  await f.restart();assert.equal(f.adapter.calls.length,1,'restart never resends the previous message');const state=await f.api('state');assert.equal(state.preferences.projectId,null);assert.equal(state.preferences.drafts[s.id],'saved unsent thought');assert.equal(state.sessions[0].projectId,null);
  const restored=await f.api(`sessions/${s.id}`);assert.deepEqual(restored.items.map(i=>[i.type,i.text]),first.items.map(i=>[i.type,i.text]));assert.equal((await f.host.engine.readSession(s.id)).cwd,cwd);
@@ -50,7 +52,7 @@ test('stopping, continuing and queued messages work in projectless conversations
 
 test('private runtime rejects symlink roots and cannot turn a session ID into a path',async t=>{
  const root=await mkdtemp(path.join(tmpdir(),'dsh-private-path-'));t.after(()=>rm(root,{recursive:true,force:true}));const outside=path.join(root,'outside'),data=path.join(root,'data');await mkdir(outside);await mkdir(data);const spaces=new SessionWorkspaces(data,()=>assert.fail('not a project'));const session={id:'../../outside',projectId:null};assert.equal(path.dirname(spaces.path(session)),path.join(data,'chat-runtime'));
- await symlink(outside,path.join(data,'chat-runtime'));await assert.rejects(spaces.ensure(session),{code:'INVALID_PATH'});
+ await fixtureSymlink(outside,path.join(data,'chat-runtime'));await assert.rejects(spaces.ensure(session),{code:'INVALID_PATH'});
 });
 
 test('nullable workspace persists while dangling and missing project bindings remain rejected',async t=>{

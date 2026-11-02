@@ -1,3 +1,4 @@
+import {fixtureSymlink} from './fixtures/fs-platform.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtemp, rm, symlink } from 'node:fs/promises';
@@ -32,7 +33,7 @@ test('a second host cannot share live state, including through a directory alias
   try{
     host=await startHost({dataDir:root,autoStart:false});
     await assert.rejects(startHost({dataDir:root,autoStart:false}),error=>error.code==='DATA_IN_USE');
-    await symlink(root,root+'-alias');await assert.rejects(startHost({dataDir:root+'-alias',autoStart:false}),error=>error.code==='DATA_IN_USE');
+    await fixtureSymlink(root,root+'-alias');await assert.rejects(startHost({dataDir:root+'-alias',autoStart:false}),error=>error.code==='DATA_IN_USE');
     const firstClose=host.close();assert.equal(host.close(),firstClose);await firstClose;host=null;
     next=await startHost({dataDir:root,autoStart:false});
     assert.equal((await fetch(next.url+'/api/bootstrap')).status,200);

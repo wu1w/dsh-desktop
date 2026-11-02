@@ -12,7 +12,7 @@ const flush=()=>new Promise(resolve=>setImmediate(resolve));
 
 async function startup({supervised,startHost=async()=>{throw Object.assign(Error('DATA_IN_USE'),{code:'DATA_IN_USE'});},beforeReject}={}) {
   const app=new EventEmitter(),events=[],logs=[],timers=new Map();let nextTimer=0;
-  Object.assign(app,{setName(){},getPath:()=>'/isolated-test',setPath(){},requestSingleInstanceLock:()=>true,whenReady:()=>Promise.resolve(),getLocale:()=> 'en',getVersion:()=> 'test',setAboutPanelOptions(){},quit:()=>events.push(['quit',0]),exit:code=>events.push(['exit',code])});
+  Object.assign(app,{setName(){},setAppUserModelId(){},getPath:()=>'/isolated-test',setPath(){},requestSingleInstanceLock:()=>true,whenReady:()=>Promise.resolve(),getLocale:()=> 'en',getVersion:()=> 'test',setAboutPanelOptions(){},quit:()=>events.push(['quit',0]),exit:code=>events.push(['exit',code])});
   const electron={app,ipcMain:{handle(){}},dialog:{showErrorBox:()=>events.push(['dialog'])},Menu:{buildFromTemplate:value=>value,setApplicationMenu(){}},screen:{getPrimaryDisplay(){throw Error('WINDOW_START_FAILED');}},powerSaveBlocker:{start:()=>1,stop(){}},powerMonitor:new EventEmitter()};
   const support=require('./support.cjs');
   const injected=source.replace("await import('../server/index.mjs')",'await importHost()');

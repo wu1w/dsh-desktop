@@ -1,3 +1,5 @@
+import {assertPrivatePermissions} from './fixtures/permissions.mjs';
+import {fixtureSymlink} from './fixtures/fs-platform.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {mkdtemp,mkdir,writeFile,readFile,rm,realpath,stat,symlink,access} from 'node:fs/promises';
@@ -261,7 +263,7 @@ test('concurrent enable and disable persist the final state without duplicate li
     const settings=JSON.parse(await readFile(path.join(root,'data','plugins.json'),'utf8'));
     assert.equal(settings.enabled['serial-fixture'],false);
     assert.equal(current.host.list()[0].active,false);
-    assert.equal((await stat(path.join(root,'data','plugins.json'))).mode&0o777,0o600);
+    assertPrivatePermissions(path.join(root,'data','plugins.json'),0o600);
   }finally{await current?.close();await rm(root,{recursive:true,force:true});}
 });
 
@@ -312,7 +314,7 @@ test('managed data-directory aliases accept valid packages without weakening the
   const root=await fixtureRoot();let current;
   try {
     const data=path.join(root,'actual-data');await mkdir(data);
-    const alias=path.join(root,'data-alias');await symlink(data,alias,'dir');
+    const alias=path.join(root,'data-alias');await fixtureSymlink(data,alias,'dir');
     const source=await makePackage(root,'alias-fixture');
     current=await makeHost(root,{dataDir:alias});await current.host.install(source);await current.host.enable('alias-fixture');
     assert.equal((await dispatched(current.host)).handled,true);
@@ -328,7 +330,7 @@ test('appearance assets reject path traversal, symlink escapes, forbidden extens
     await writeFile(path.join(assets,'nested','view.js'),'export const safe = true;');
     await writeFile(path.join(assets,'secret.json'),'private fixture data');
     await writeFile(path.join(root,'outside.js'),'outside fixture data');
-    await symlink(path.join(root,'outside.js'),path.join(assets,'escape.js'));
+    await fixtureSymlink(path.join(root,'outside.js'),path.join(assets,'escape.js'));
     const builtin=await makeBuiltin(root,'asset-fixture',{type:'appearance',body:`ctx.effect(()=>host.registerAppearance({root:${JSON.stringify(assets)},entry:'nested/view.js',styles:[]}));`});
     current=await makeHost(root,{builtins:[builtin]});
     assert.equal(await current.host.asset('asset-fixture','nested/view.js'),path.join(assets,'nested','view.js'));
@@ -344,7 +346,7 @@ test('package install rejects escaped entry files and symlinks while preserving 
     const outside=path.join(root,'sources','outside.mjs');await writeFile(outside,'export function apply() {}');
     current=await makeHost(root);
     await rejectsCode(current.host.install(escaped),'INVALID_PLUGIN');
-    const linked=await makePackage(root,'linked-fixture');await symlink(outside,path.join(linked,'external.mjs'));
+    const linked=await makePackage(root,'linked-fixture');await fixtureSymlink(outside,path.join(linked,'external.mjs'));
     await rejectsCode(current.host.install(linked),'INVALID_PLUGIN');
     await access(outside);await access(path.join(linked,'index.mjs'));
     assert.deepEqual(current.host.list(),[]);

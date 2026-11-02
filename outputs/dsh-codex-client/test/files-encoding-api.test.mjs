@@ -1,3 +1,5 @@
+import {assertPrivatePermissions} from './fixtures/permissions.mjs';
+import {fixtureSymlink} from './fixtures/fs-platform.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtemp, mkdir, writeFile, readFile, readdir, stat, symlink, rm } from 'node:fs/promises';
@@ -59,7 +61,7 @@ test('file HTTP API rejects lossy text and preserves byte versions, formats and 
       const base = await read('文档.txt'); assert.equal(base.status, 200);
       assert.equal(base.body.content, content); assert.equal(base.body.version, hash(bytes));
       assert.equal((await api(route, { path: '文档.txt', content: base.body.content, version: base.body.version })).status, 200);
-      assert.deepEqual(await readFile(target), bytes); assert.equal((await stat(target)).mode & 0o777, 0o600);
+      assert.deepEqual(await readFile(target), bytes); assertPrivatePermissions(target,0o600);
       const changed = content.replace('第二行', '修改后的第二行');
       assert.equal((await api(route, { path: '文档.txt', content: changed, version: base.body.version })).status, 200);
       assert.deepEqual(await readFile(target), Buffer.from(changed));
@@ -68,7 +70,7 @@ test('file HTTP API rejects lossy text and preserves byte versions, formats and 
 
     await t.test('canonical concurrent HTTP writes accept one expected byte version and leave no debris', async () => {
       const target = path.join(projectPath, 'concurrent.txt'); await writeFile(target, '\ufeff基础\r\n');
-      await symlink(target, path.join(projectPath, 'alias.txt'));
+      await fixtureSymlink(target, path.join(projectPath, 'alias.txt'));
       const base = (await read('concurrent.txt')).body, choices = ['\ufeff甲😀\r\n', '\ufeff乙😀\r\n'];
       const results = await Promise.all(choices.map((content, index) => api(route, { path: index ? 'alias.txt' : 'concurrent.txt', content, version: base.version })));
       assert.deepEqual(results.map(result => result.status).sort(), [200, 409]);

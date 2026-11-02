@@ -1,3 +1,5 @@
+import {assertPrivatePermissions} from './fixtures/permissions.mjs';
+import {fixtureSymlink} from './fixtures/fs-platform.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import promises, { mkdtemp, writeFile, readFile, readdir, stat, symlink, rm, appendFile, realpath } from 'node:fs/promises';
@@ -54,7 +56,7 @@ test('Chinese, emoji, literal replacement characters, BOM and CRLF round trip by
   assert.equal(file.version, hash(bytes));
   await writeProjectFile(root, '文档.txt', file.content, file.version);
   assert.deepEqual(await readFile(target), bytes);
-  assert.equal((await stat(target)).mode & 0o777, 0o600);
+  assertPrivatePermissions(target,0o600);
   const changed = content.replace('第二行', '已编辑');
   await writeProjectFile(root, '文档.txt', changed, file.version);
   assert.deepEqual(await readFile(target), Buffer.from(changed));
@@ -114,9 +116,19 @@ test('a file growing after fstat is read at most limit plus one bytes and the ha
   } finally { intercepted?.mock.restore(); syncBuiltinESMExports(); }
 }));
 
+test('an opened identity replacement is rejected before any body bytes are read',async t=>fixture(async root=>{
+ const target=path.join(root,'replacement-race.txt');await writeFile(target,'safe');const canonical=await realpath(target),native=promises.open;let reads=0,closed=false;
+ const mocked=t.mock.method(promises,'open',async(...args)=>{
+  const handle=await native(...args);if(args[0]!==canonical)return handle;
+  return{async stat(...options){const info=await handle.stat(...options);return Object.assign(info,{ino:typeof info.ino==='bigint'?info.ino+1n:-1});},async read(){reads++;throw Error('PRIVATE_BYTES_MUST_NOT_BE_READ');},async close(){closed=true;await handle.close();}};
+ });syncBuiltinESMExports();
+ try{await assert.rejects(readProjectFile(root,'replacement-race.txt'),{code:'FILE_CHANGED'});assert.equal(reads,0);assert.equal(closed,true);}
+ finally{mocked.mock.restore();syncBuiltinESMExports();}
+}));
+
 test('Unicode saves keep canonical alias CAS and a rejected save does not poison its lock', async () => fixture(async root => {
   await writeFile(path.join(root, '文档.txt'), '\ufeff初稿\r\n', { mode: 0o600 });
-  await symlink(path.join(root, '文档.txt'), path.join(root, 'alias.txt'));
+  await fixtureSymlink(path.join(root, '文档.txt'), path.join(root, 'alias.txt'));
   const base = await readProjectFile(root, '文档.txt'), contents = ['\ufeff甲😀\r\n', '\ufeff乙😀\r\n'];
   const results = await Promise.allSettled(contents.map((content, index) => writeProjectFile(root, index ? 'alias.txt' : '文档.txt', content, base.version)));
   assert.equal(results.filter(result => result.status === 'fulfilled').length, 1);

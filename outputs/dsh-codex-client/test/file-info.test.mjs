@@ -1,3 +1,4 @@
+import {fixtureSymlink} from './fixtures/fs-platform.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import promises, { mkdtemp, mkdir, writeFile, readFile, stat, truncate, realpath, rename, unlink, symlink, rm } from 'node:fs/promises';
@@ -15,7 +16,7 @@ const execute = promisify(execFile);
 async function temporary(action) { const root = await mkdtemp(path.join(tmpdir(), 'dsh-file-info-')); try { await action(root); } finally { await rm(root, { recursive: true, force: true }); } }
 
 test('file info returns only ordinary metadata with ISO time and canonical internal aliases', async () => temporary(async root => {
-  const target = path.join(root, '中文 文档.txt'), content = Buffer.from('\ufeff中文😀\r\n'); await writeFile(target, content); await symlink(target, path.join(root, 'alias.txt'));
+  const target = path.join(root, '中文 文档.txt'), content = Buffer.from('\ufeff中文😀\r\n'); await writeFile(target, content); await fixtureSymlink(target, path.join(root, 'alias.txt'));
   const metadata = await stat(target), info = await readProjectFileInfo(root, '中文 文档.txt');
   assert.deepEqual(info, { path: '中文 文档.txt', name: '中文 文档.txt', size: content.length, modifiedAt: metadata.mtime.toISOString() });
   assert.deepEqual(Object.keys(info).sort(), ['modifiedAt', 'name', 'path', 'size']);
@@ -43,26 +44,25 @@ test('metadata opens with no-follow and nonblocking flags and never reads body b
       return { stat: (...parameters) => handle.stat(...parameters), read: () => { reads++; throw Error('BODY_READ_FORBIDDEN'); }, readFile: () => { reads++; throw Error('BODY_READ_FORBIDDEN'); }, async close() { closed = true; await handle.close(); } };
     }); syncBuiltinESMExports();
     assert.equal((await readProjectFileInfo(root, 'large.bin')).size, 64 * 1024 * 1024);
-    assert.ok(flags & constants.O_NOFOLLOW); assert.ok(flags & constants.O_NONBLOCK); assert.equal(reads, 0); assert.equal(closed, true);
+    if(process.platform==='win32'){assert.equal(constants.O_NOFOLLOW,undefined);assert.equal(flags,constants.O_RDONLY);}else{assert.ok(flags & constants.O_NOFOLLOW);assert.ok(flags & constants.O_NONBLOCK);}assert.equal(reads, 0); assert.equal(closed, true);
   } finally { intercept?.mock.restore(); syncBuiltinESMExports(); }
 }));
 
 test('metadata rejects traversal, external files and external sensitive metadata aliases', async () => temporary(async root => {
   const project = path.join(root, 'project'), outside = path.join(root, 'outside'); await mkdir(project); await mkdir(outside); await writeFile(path.join(outside, 'config'), 'private');
-  await symlink(path.join(outside, 'config'), path.join(project, 'alias.txt')); await symlink(outside, path.join(project, '.git')); await symlink('/dev/null', path.join(project, 'device'));
+  await fixtureSymlink(path.join(outside, 'config'), path.join(project, 'alias.txt')); await fixtureSymlink(outside, path.join(project, '.git')); await fixtureSymlink('/dev/null', path.join(project, 'device'));
   for (const relative of ['../outside/config', 'alias.txt', '.git/config', 'device']) await assert.rejects(readProjectFileInfo(project, relative), /OUTSIDE_PROJECT/);
   for (const relative of ['/absolute', 'contains\0null', undefined]) await assert.rejects(readProjectFileInfo(project, relative), /INVALID_PATH/);
   await assert.rejects(readProjectFileInfo(project, 'missing.txt'), { code: 'ENOENT' });
 }));
 
-test('directories and an actual FIFO are rejected without blocking or leaking a descriptor', { timeout: 3000 }, async t => temporary(async root => {
-  await mkdir(path.join(root, 'directory')); const fifo = path.join(root, 'fifo'); await execute('mkfifo', [fifo]);
+for(const kind of ['directory','fifo'])test(kind+' metadata is rejected without blocking or leaking a descriptor', { timeout: 3000,skip:kind==='fifo'&&process.platform==='win32'?'POSIX FIFO is unavailable on Windows':false }, async t => temporary(async root => {
+  if(kind==='directory')await mkdir(path.join(root,kind));else await execute('mkfifo',[path.join(root,kind)]);
   const originalOpen = promises.open; let intercept, opened = 0, closed = 0;
   try {
     intercept = t.mock.method(promises, 'open', async (...args) => { const handle = await originalOpen(...args); opened++; return { stat: (...parameters) => handle.stat(...parameters), async close() { closed++; await handle.close(); } }; }); syncBuiltinESMExports();
-    await assert.rejects(readProjectFileInfo(root, 'directory'), { code: 'FILE_LIMIT' });
-    await assert.rejects(readProjectFileInfo(root, 'fifo'), { code: 'FILE_LIMIT' });
-    assert.equal(opened, 2); assert.equal(closed, 2);
+    await assert.rejects(readProjectFileInfo(root,kind), { code: 'FILE_LIMIT' });
+    assert.equal(opened,1); assert.equal(closed,1);
   } finally { intercept?.mock.restore(); syncBuiltinESMExports(); }
 }));
 
@@ -78,6 +78,16 @@ test('metadata rejects content changes, inode replacements and disappearance bet
             const metadata = await handle.stat(...parameters);
             if (++calls === 1) {
               if (mode === 'changed') await writeFile(target, 'external changed content');
+              else if(process.platform==='win32'){
+                // NTFS denies replacing this open handle. Inject only the
+                // second pathname stat to exercise the same race boundary;
+                // retain the actual descriptor and its close obligation.
+                const nativeStat=promises.stat,pathnameStat=t.mock.method(promises,'stat',async(file,...options)=>{
+                  if(file!==canonical)return nativeStat(file,...options);
+                  if(mode==='missing')throw Object.assign(Error('controlled disappearance'),{code:'ENOENT'});
+                  const info=await nativeStat(file,...options);return Object.assign(info,{ino:-1});
+                });syncBuiltinESMExports();t.after(()=>{pathnameStat.mock.restore();syncBuiltinESMExports();});
+              }
               else if (mode === 'replaced') { const replacement = path.join(root, 'replacement'); await writeFile(replacement, 'original'); await rename(replacement, target); }
               else await unlink(target);
             }

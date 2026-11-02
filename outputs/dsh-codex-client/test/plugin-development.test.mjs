@@ -1,3 +1,4 @@
+import {fixtureSymlink} from './fixtures/fs-platform.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {mkdtemp,readFile,writeFile,rm,symlink,mkdir} from 'node:fs/promises';
@@ -70,7 +71,7 @@ test('revocation during validation prevents activation and leaves existing runti
   const f=await fixture(t);const draft=await f.call({action:'create',pluginId:'revoke-helper'}),original=f.development.validate.bind(f.development);f.development.validate=async(...args)=>{const result=await original(...args);f.state.sessions[0].pluginDevelopment=false;return result;};await assert.rejects(f.development.engineCall('native-chat',{action:'apply',pluginId:'revoke-helper',digest:draft.digest,expectedRevision:'new'}),{code:'PLUGIN_DEVELOPMENT_DENIED'});assert.equal(f.host.records.has('revoke-helper'),false);
 });
 test('draft traversal, symlinks and builtin edits are rejected',async t=>{
-  const f=await fixture(t);const draft=await f.call({action:'create',pluginId:'path-helper'});await assert.rejects(f.write(draft,'../outside.mjs','bad'),{code:'INVALID_PLUGIN'});await symlink('/tmp',path.join(draft.root,'escaped'));await assert.rejects(f.call({action:'files',pluginId:'path-helper'}),{code:'INVALID_PLUGIN'});f.host.records.set('builtin-one',{builtin:true});await assert.rejects(f.call({action:'create',pluginId:'builtin-one'}),{code:'INVALID_PLUGIN'});f.host.records.delete('builtin-one');
+  const f=await fixture(t);const draft=await f.call({action:'create',pluginId:'path-helper'});await assert.rejects(f.write(draft,'../outside.mjs','bad'),{code:'INVALID_PLUGIN'});await fixtureSymlink('/tmp',path.join(draft.root,'escaped'));await assert.rejects(f.call({action:'files',pluginId:'path-helper'}),{code:'INVALID_PLUGIN'});f.host.records.set('builtin-one',{builtin:true});await assert.rejects(f.call({action:'create',pluginId:'builtin-one'}),{code:'INVALID_PLUGIN'});f.host.records.delete('builtin-one');
 });
 test('changed installed code is detected before import and startup restores the last intact version',async t=>{
   const f=await fixture(t);let draft=await f.call({action:'create',pluginId:'corrupt-helper'});const first=await f.apply(draft);draft=await f.call({action:'files',pluginId:'corrupt-helper'});draft=await f.write(draft,'notes.md','second version');await f.apply(draft);

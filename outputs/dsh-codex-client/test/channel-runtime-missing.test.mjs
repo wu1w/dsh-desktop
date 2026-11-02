@@ -18,7 +18,7 @@ test('missing interpreter or bridge is classified before starting a process',asy
 });
 
 test('missing runtime pauses reconnection and queued work until an explicit retry without clearing configuration',async t=>{
-  const dataDir=await realpath(await mkdtemp(path.join(tmpdir(),'dsh-channel-paused-')));t.after(()=>rm(dataDir,{recursive:true,force:true}));
+  const dataDir=await realpath(await mkdtemp(path.join(tmpdir(),'dsh-channel-paused-')));
   let starts=0,available=false;
   class Transport extends EventEmitter {
     async start(){starts++;if(!available)throw Object.assign(Error('missing'),{code:'CHANNEL_RUNTIME_MISSING'});this.connected=true;return {connected:true};}
@@ -26,7 +26,7 @@ test('missing runtime pauses reconnection and queued work until an explicit retr
     async request(){return {connected:true};}
   }
   const host={dataDir,appRoot:dataDir,state:{preferences:{},projects:[],sessions:[],models:[{id:'fixture-model'}]},getSelectedEngine:()=> 'codex',hasFeature:()=>false};
-  const manager=await new ChannelManager({host,platform:'qq',Process:Transport,tickMs:1000000}).start();clearInterval(manager.timer);t.after(()=>manager.close());
+  const manager=await new ChannelManager({host,platform:'qq',Process:Transport,tickMs:1000000}).start();clearInterval(manager.timer);t.after(async()=>{await manager.close();await rm(dataDir,{recursive:true,force:true});});
   await manager.saveConfig({projectId:null,model:'fixture-model',permission:'read-only',locale:'en',appId:'fixture',secret:'fake-only',allowedUsers:['fixture'],allowedGroups:[]});
   await assert.rejects(manager.connect(),{code:'CHANNEL_RUNTIME_MISSING'});
   assert.equal(manager.snapshot().runtime.state,'error');assert.equal(manager.snapshot().runtime.nextRetryAt,null);assert.equal(manager.snapshot().runtime.retryBlocked,true);

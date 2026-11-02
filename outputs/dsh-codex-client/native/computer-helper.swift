@@ -7,14 +7,42 @@ func fail(_ code:String) throws -> Never {throw Failure(code:code)}
 func attr(_ node:AXUIElement,_ key:String)->CFTypeRef?{var value:CFTypeRef?;return AXUIElementCopyAttributeValue(node,key as CFString,&value) == .success ? value:nil}
 func string(_ node:AXUIElement,_ key:String)->String{(attr(node,key) as? String) ?? ""}
 func rect(_ node:AXUIElement)->CGRect?{guard let p=attr(node,kAXPositionAttribute),let s=attr(node,kAXSizeAttribute),CFGetTypeID(p)==AXValueGetTypeID(),CFGetTypeID(s)==AXValueGetTypeID() else{return nil};var point=CGPoint.zero;var size=CGSize.zero;AXValueGetValue(p as! AXValue,.cgPoint,&point);AXValueGetValue(s as! AXValue,.cgSize,&size);return CGRect(origin:point,size:size)}
-var elements:[AXUIElement]=[];var signatures:[String]=[];var observedPid:pid_t=0;var observedWindow:AXUIElement?;var observedRect:CGRect?;var token=""
+var elements:[AXUIElement]=[];var signatures:[String]=[];var observedPid:pid_t=0;var observedWindow:AXUIElement?;var observedRect:CGRect?;var observedSheets:[AXUIElement]=[];var token=""
 func appFor(_ input:[String:Any])throws->NSRunningApplication{guard let value=input["pid"] as? Int,value>0,let app=NSRunningApplication(processIdentifier:pid_t(value)),!app.isTerminated else{try fail("COMPUTER_APP_GONE")};return app}
+func axElement(_ value:CFTypeRef?)->AXUIElement?{guard let value=value,CFGetTypeID(value)==AXUIElementGetTypeID() else{return nil};return value as! AXUIElement}
+func activeWindow(_ root:AXUIElement)->AXUIElement?{
+ // A modal sheet may keep AXFocusedWindow pointing at its parent. Bind the
+ // observed focus element's actual window so a new modal cannot inherit keys.
+ if let focused=axElement(attr(root,kAXFocusedUIElementAttribute)),let window=axElement(attr(focused,kAXWindowAttribute)){return window}
+ return axElement(attr(root,kAXFocusedWindowAttribute))
+}
+func belongsToObservedWindow(_ element:AXUIElement)->Bool{
+ guard let window=observedWindow else{return false};var current:AXUIElement?=element
+ for _ in 0..<40{guard let node=current else{return false};if CFEqual(node,window){return true};current=axElement(attr(node,kAXParentAttribute))}
+ return false
+}
+func ensureObservedFocus(_ app:NSRunningApplication)throws{
+ guard let window=observedWindow,let previous=observedRect else{try fail("COMPUTER_OBSERVATION_STALE")}
+ guard app.activate(options:[]),AXUIElementPerformAction(window,kAXRaiseAction as CFString) == .success else{try fail("COMPUTER_FOCUS_CHANGED")}
+ RunLoop.current.run(until:Date(timeIntervalSinceNow:0.1))
+ let root=AXUIElementCreateApplication(app.processIdentifier)
+ guard NSWorkspace.shared.frontmostApplication?.processIdentifier==app.processIdentifier,let focused=activeWindow(root),CFEqual(focused,window) else{try fail("COMPUTER_FOCUS_CHANGED")}
+ let sheets=(attr(window,kAXSheetsAttribute) as? [AXUIElement]) ?? []
+ guard sheets.count==observedSheets.count,sheets.allSatisfy({sheet in observedSheets.contains{CFEqual(sheet,$0)}}) else{try fail("COMPUTER_FOCUS_CHANGED")}
+ guard let current=rect(window),current==previous else{try fail("COMPUTER_OBSERVATION_STALE")}
+ if (attr(window,kAXMinimizedAttribute) as? Bool)==true{try fail("COMPUTER_FOCUS_CHANGED")}
+ if let focusedElement=axElement(attr(root,kAXFocusedUIElementAttribute)),!belongsToObservedWindow(focusedElement){try fail("COMPUTER_FOCUS_CHANGED")}
+}
+func verifiedPoint(_ point:CGPoint)throws{
+ var hit:AXUIElement?
+ guard AXUIElementCopyElementAtPosition(AXUIElementCreateSystemWide(),Float(point.x),Float(point.y),&hit) == .success,let element=hit,belongsToObservedWindow(element) else{try fail("COMPUTER_FOCUS_CHANGED")}
+}
 func observe(_ app:NSRunningApplication)throws->[String:Any]{
  guard AXIsProcessTrusted() else{try fail("COMPUTER_ACCESSIBILITY_REQUIRED")}
  let root=AXUIElementCreateApplication(app.processIdentifier);AXUIElementSetMessagingTimeout(root,2)
  let wins=(attr(root,kAXWindowsAttribute) as? [AXUIElement]) ?? []
- guard let window=(attr(root,kAXFocusedWindowAttribute).map{$0 as! AXUIElement}) ?? wins.first else{try fail("COMPUTER_NO_WINDOW")}
- elements=[];signatures=[];observedPid=app.processIdentifier;observedWindow=window;observedRect=rect(window);token=UUID().uuidString
+ guard let window=activeWindow(root) ?? wins.first else{try fail("COMPUTER_NO_WINDOW")}
+ elements=[];signatures=[];observedPid=app.processIdentifier;observedWindow=window;observedRect=rect(window);observedSheets=(attr(window,kAXSheetsAttribute) as? [AXUIElement]) ?? [];token=UUID().uuidString
  var lines:[[String:Any]]=[];var visited=Set<CFHashCode>();var remaining=2000
  func walk(_ node:AXUIElement,_ depth:Int){
   if remaining<=0 || elements.count>=240 || depth>18{return};remaining-=1;let hash=CFHash(node);if visited.contains(hash){return};visited.insert(hash)
@@ -37,7 +65,7 @@ func observe(_ app:NSRunningApplication)throws->[String:Any]{
  if let r=observedRect{result["bounds"]=["x":r.origin.x,"y":r.origin.y,"width":r.width,"height":r.height]}
  return result
 }
-func node(_ input:[String:Any])throws->AXUIElement{guard let id=input["element"] as? Int,id>=0,id<elements.count else{try fail("COMPUTER_ELEMENT_STALE")};let target=elements[id];if signatures[id] != [string(target,kAXRoleAttribute),string(target,kAXTitleAttribute),string(target,kAXValueAttribute)].joined(separator:"|"){try fail("COMPUTER_ELEMENT_STALE")};return target}
+func node(_ input:[String:Any])throws->AXUIElement{guard let id=input["element"] as? Int,id>=0,id<elements.count else{try fail("COMPUTER_ELEMENT_STALE")};let target=elements[id];guard belongsToObservedWindow(target) else{try fail("COMPUTER_ELEMENT_STALE")};if signatures[id] != [string(target,kAXRoleAttribute),string(target,kAXTitleAttribute),string(target,kAXValueAttribute)].joined(separator:"|"){try fail("COMPUTER_ELEMENT_STALE")};return target}
 func keyEvent(_ code:CGKeyCode,_ flags:CGEventFlags){for down in [true,false]{let event=CGEvent(keyboardEventSource:nil,virtualKey:code,keyDown:down);event?.flags=flags;event?.post(tap:.cghidEventTap)}}
 func perform(_ input:[String:Any])throws->[String:Any]{
  let action=input["action"] as? String ?? ""
@@ -50,6 +78,7 @@ func perform(_ input:[String:Any])throws->[String:Any]{
  guard observedPid==app.processIdentifier,input["nativeObservation"] as? String==token,!token.isEmpty else{try fail("COMPUTER_OBSERVATION_STALE")}
  if let window=observedWindow,let previous=observedRect,rect(window) != previous{token="";try fail("COMPUTER_OBSERVATION_STALE")}
  token="" // Mutations consume the observation even if the transport result is lost.
+ try ensureObservedFocus(app)
  if action=="click",input["element"] != nil{
   let target=try node(input);guard AXUIElementPerformAction(target,kAXPressAction as CFString) == .success else{try fail("COMPUTER_ACTION_UNAVAILABLE")}
  }else if action=="type",input["element"] != nil{
@@ -57,23 +86,23 @@ func perform(_ input:[String:Any])throws->[String:Any]{
   guard let value=input["text"] as? String,value.utf8.count<=80000 else{try fail("COMPUTER_INVALID_INPUT")}
   guard AXUIElementSetAttributeValue(target,kAXValueAttribute as CFString,value as CFString) == .success else{try fail("COMPUTER_ACTION_UNAVAILABLE")}
  }else{
-  guard app.activate(options:[]),let window=observedWindow else{try fail("COMPUTER_APP_GONE")}
-  _ = AXUIElementPerformAction(window,kAXRaiseAction as CFString)
-  RunLoop.current.run(until:Date(timeIntervalSinceNow:0.1))
-  guard NSWorkspace.shared.frontmostApplication?.processIdentifier==app.processIdentifier else{try fail("COMPUTER_FOCUS_CHANGED")}
+  try ensureObservedFocus(app)
   if action=="key"{
    let parts=(input["key"] as? String ?? "").lowercased().split(separator:"+").map(String.init)
    var flags:CGEventFlags=[];for part in parts.dropLast(){switch part{case "cmd","meta","super":flags.insert(.maskCommand);case "ctrl","control":flags.insert(.maskControl);case "alt","option":flags.insert(.maskAlternate);case "shift":flags.insert(.maskShift);default:try fail("COMPUTER_INVALID_INPUT")}}
    let codes:[String:CGKeyCode]=["return":36,"enter":36,"tab":48,"escape":53,"backspace":51,"delete":117,"up":126,"down":125,"left":123,"right":124,"space":49,"a":0,"c":8,"v":9,"x":7,"z":6,"f":3,"l":37,"w":13]
-   guard let key=parts.last,let code=codes[key] else{try fail("COMPUTER_INVALID_INPUT")};keyEvent(code,flags)
+   guard let key=parts.last,let code=codes[key] else{try fail("COMPUTER_INVALID_INPUT")}
+   if let focused=axElement(attr(AXUIElementCreateApplication(app.processIdentifier),kAXFocusedUIElementAttribute)),string(focused,kAXSubroleAttribute)==kAXSecureTextFieldSubrole{try fail("COMPUTER_PROTECTED_FIELD")}
+   try ensureObservedFocus(app);keyEvent(code,flags)
   }else if action=="click"{
    guard let r=observedRect,let x=input["x"] as? Double,let y=input["y"] as? Double,x>=0,y>=0,x<r.width,y<r.height else{try fail("COMPUTER_INVALID_INPUT")}
    let point=CGPoint(x:r.origin.x+x,y:r.origin.y+y)
+   try ensureObservedFocus(app);try verifiedPoint(point)
    CGEvent(mouseEventSource:nil,mouseType:.leftMouseDown,mouseCursorPosition:point,mouseButton:.left)?.post(tap:.cghidEventTap)
    CGEvent(mouseEventSource:nil,mouseType:.leftMouseUp,mouseCursorPosition:point,mouseButton:.left)?.post(tap:.cghidEventTap)
   }else if action=="scroll"{
    let direction=input["direction"] as? String ?? "down";let horizontal=direction=="left" || direction=="right";let amount:Int32=(direction=="up" || direction=="left") ? 400:-400
-   if let r=observedRect{CGEvent(mouseEventSource:nil,mouseType:.mouseMoved,mouseCursorPosition:CGPoint(x:r.midX,y:r.midY),mouseButton:.left)?.post(tap:.cghidEventTap)}
+   if let r=observedRect{try ensureObservedFocus(app);try verifiedPoint(CGPoint(x:r.midX,y:r.midY));CGEvent(mouseEventSource:nil,mouseType:.mouseMoved,mouseCursorPosition:CGPoint(x:r.midX,y:r.midY),mouseButton:.left)?.post(tap:.cghidEventTap)}
    CGEvent(scrollWheelEvent2Source:nil,units:.pixel,wheelCount:2,wheel1:horizontal ? 0:amount,wheel2:horizontal ? amount:0,wheel3:0)?.post(tap:.cghidEventTap)
   }else{try fail("COMPUTER_ACTION_UNAVAILABLE")}
  }

@@ -1,3 +1,6 @@
+import {denyFixtureWrites} from './fixtures/permissions.mjs';
+import {assertPrivatePermissions} from './fixtures/permissions.mjs';
+import {fixtureSymlink} from './fixtures/fs-platform.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {mkdtemp,realpath,writeFile,readFile,stat,readdir,rm,symlink,mkdir,chmod} from 'node:fs/promises';
@@ -23,7 +26,7 @@ test('save snapshots immediately, serializes fsynced atomic writes and backs up 
   const {dir,store,file,backup}=await setup();try{
     const state=sample();await store.load();const first=store.save(state);state.extension.preserved='second';const second=store.save(state);state.extension.preserved='not-saved';await Promise.all([first,second]);await store.flush();
     assert.equal(JSON.parse(await readFile(file,'utf8')).extension.preserved,'second');assert.equal(JSON.parse(await readFile(backup,'utf8')).extension.preserved,true);
-    for(const target of [file,backup])assert.equal((await stat(target)).mode&0o777,0o600);
+    for(const target of [file,backup])assertPrivatePermissions(target,0o600);
     const backupBefore=await stat(backup);const current=await store.load();await store.save(current.state);assert.equal((await stat(backup)).mtimeMs,backupBefore.mtimeMs);
     assert.ok((await readdir(dir)).every(name=>!name.endsWith('.tmp')));
   }finally{await clean(dir);}
@@ -45,7 +48,7 @@ test('explicit restore and reset archive exact corrupt bytes privately before wr
     const {dir,store,file,backup}=await setup();try{
       const bad=Buffer.from([0xff,0x00,0x7b,0x62]);await writeFile(file,bad);const good=Buffer.from(JSON.stringify(sample()));await writeFile(backup,good);await store.load();
       const restored=await store.recover({action,candidateId:'last-good'});assert.match(restored.archive,/^client-corrupt-[\w.-]+\.json$/);
-      assert.deepEqual(await readFile(path.join(dir,restored.archive)),bad);assert.equal((await stat(path.join(dir,restored.archive))).mode&0o777,0o600);assert.equal((await stat(file)).mode&0o777,0o600);
+      assert.deepEqual(await readFile(path.join(dir,restored.archive)),bad);assertPrivatePermissions(path.join(dir,restored.archive),0o600);assertPrivatePermissions(file,0o600);
       assert.equal(restored.state.sessions.length,action==='restore'?1:0);assert.equal((await store.load()).recovery,null);
       if(action==='restore')assert.deepEqual(await readFile(file),good);
     }finally{await clean(dir);}
@@ -68,9 +71,9 @@ test('unsafe symlinks, directories and oversized files fail closed without touch
   for(const kind of ['main-link','backup-link','parent-link','directory','oversized']){
     const {dir,file,backup}=await setup();const outside=await setup();try{
       await writeFile(outside.file,'external unchanged');let dataDir=dir;
-      if(kind==='main-link')await symlink(outside.file,file);
-      if(kind==='backup-link'){await writeFile(file,'bad');await symlink(outside.file,backup);}
-      if(kind==='parent-link'){dataDir=path.join(dir,'alias');await symlink(outside.dir,dataDir);}
+      if(kind==='main-link')await fixtureSymlink(outside.file,file);
+      if(kind==='backup-link'){await writeFile(file,'bad');await fixtureSymlink(outside.file,backup);}
+      if(kind==='parent-link'){dataDir=path.join(dir,'alias');await fixtureSymlink(outside.dir,dataDir);}
       if(kind==='directory')await mkdir(file);
       if(kind==='oversized')await writeFile(file,Buffer.alloc(8*1024*1024+1,0x20));
       const store=new ClientStateStore({dataDir});const loaded=await store.load();assert.equal(loaded.recovery.canReset,false);assert.equal(loaded.recovery.code,kind==='oversized'?'CLIENT_STATE_TOO_LARGE':'CLIENT_STATE_UNSAFE_PATH');
@@ -98,13 +101,13 @@ test('schema rejects ID/reference and known-field corruption while allowing abse
   }finally{await clean(dir);}
 });
 
-test('real filesystem write failure preserves the valid original and does not poison subsequent saves',{skip:process.getuid?.()===0},async()=>{
-  const {dir,store,file,backup}=await setup();try{
+test('real filesystem write failure preserves the valid original and does not poison subsequent saves',{skip:process.getuid?.()===0},async t=>{
+  const {dir,store,file,backup}=await setup();let restore;try{
     const bytes=Buffer.from(JSON.stringify(sample()));await writeFile(file,bytes);const state=(await store.load()).state;state.extension.changed=true;
-    await chmod(dir,0o500);await assert.rejects(store.save(state),{code:'CLIENT_STATE_IO'});await store.flush();await chmod(dir,0o700);
+    if(process.platform==='win32')restore=denyFixtureWrites(t,dir);else await chmod(dir,0o500);await assert.rejects(store.save(state),{code:'CLIENT_STATE_IO'});await store.flush();restore?.();restore=null;if(process.platform!=='win32')await chmod(dir,0o700);
     assert.deepEqual(await readFile(file),bytes);assert.ok(!(await readdir(dir)).some(name=>name.endsWith('.tmp')));
     await store.save(state);await store.flush();assert.deepEqual(await readFile(backup),bytes);assert.equal(JSON.parse(await readFile(file,'utf8')).extension.changed,true);
-  }finally{await chmod(dir,0o700);await clean(dir);}
+  }finally{restore?.();restore=null;if(process.platform!=='win32')await chmod(dir,0o700);await clean(dir);}
 });
 
 test('actual task-owned old client seeds remain readable without rewriting their copied bytes',async()=>{

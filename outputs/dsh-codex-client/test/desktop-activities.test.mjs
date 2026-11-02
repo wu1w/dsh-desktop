@@ -16,7 +16,7 @@ const summary = activities => activitySummary({ activities });
 async function harness({ state = { sessions: [], activities: [] }, dirty = false, dirtyRevision, rendererRunning = false, answer = () => 1, onFlush, onSave, onClose, onDispose } = {}) {
   const steps = [], dialogs = [], messages = [], ended = [], handlers = new Map(); let stateCalls = 0;
   const app = new EventEmitter();
-  Object.assign(app, { setName() {}, getPath: () => tmpdir(), setPath() {}, requestSingleInstanceLock: () => true, whenReady: () => new Promise(() => {}), getVersion: () => 'test', setAboutPanelOptions() {}, quit: () => steps.push('quit'), exit: () => steps.push('exit') });
+  Object.assign(app, { setName() {}, setAppUserModelId() {}, getPath: () => tmpdir(), setPath() {}, requestSingleInstanceLock: () => true, whenReady: () => new Promise(() => {}), getVersion: () => 'test', setAboutPanelOptions() {}, quit: () => steps.push('quit'), exit: () => steps.push('exit') });
   const electron = { app, ipcMain: { handle: (name, callback) => handlers.set(name, callback) }, dialog: { async showMessageBox(...args) { const options = args.at(-1); dialogs.push(options); steps.push('confirm'); return { response: await answer(options, dialogs.length) }; } }, Menu: { buildFromTemplate: value => value, setApplicationMenu() {} }, screen: {}, BrowserWindow: class {}, shell: {} };
   const scopedRequire = createRequire(new URL('../desktop/main.cjs', import.meta.url));
   const source = await readFile(new URL('../desktop/main.cjs', import.meta.url), 'utf8'), module = { exports: {} };

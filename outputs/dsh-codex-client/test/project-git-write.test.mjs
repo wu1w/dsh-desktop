@@ -1,5 +1,7 @@
+import {fixtureSymlink} from './fixtures/fs-platform.mjs';
+process.env.GIT_CONFIG_NOSYSTEM='1';process.env.GIT_CONFIG_GLOBAL='/dev/null';
 import test from 'node:test';import assert from 'node:assert/strict';
-import {mkdtemp,writeFile,readFile,rm,symlink,chmod,stat,readdir} from 'node:fs/promises';
+import {mkdtemp,writeFile,readFile,rm,symlink,chmod,stat,readdir,rename} from 'node:fs/promises';
 import {execFile}from'node:child_process';import {promisify}from'node:util';import os from'node:os';import path from'node:path';
 import {ProjectGit}from'../server/project-git.mjs';
 const exec=promisify(execFile);const git=(root,...args)=>exec('git',['-c','core.hooksPath=/dev/null','-c','core.fsmonitor=false',...args],{cwd:root,env:{...process.env,GIT_CONFIG_GLOBAL:'/dev/null',GIT_CONFIG_NOSYSTEM:'1'},encoding:'utf8'});
@@ -13,7 +15,7 @@ test('stage/unstage preserve files; commit contains exactly staged bytes, binary
   const original=await readFile(path.join(root,'tracked'));const committed=await mutate(reader,root,'commit',{message:'only staged',name:'One-time User',email:'one@example.invalid'});
   assert.equal((await git(root,'show','HEAD:tracked')).stdout,'staged\n');assert.deepEqual(await readFile(path.join(root,'tracked')),original);await assert.rejects(git(root,'show','HEAD:not-staged'));assert.equal(committed.commit.oid,(await git(root,'rev-parse','HEAD')).stdout.trim());
   assert.equal((await git(root,'config','user.name')).stdout.trim(),'Fixture');assert.equal((await git(root,'show','-s','--format=%an <%ae>','HEAD')).stdout.trim(),'One-time User <one@example.invalid>');
-  for(const name of ['-dash','[literal]','line\nbreak','中文']){await writeFile(path.join(root,name),Buffer.from([0,255,2,10]));await mutate(reader,root,'stage',{path:name});assert.equal((await reader.status(root)).files.find(x=>x.path===name).staged,true);await mutate(reader,root,'unstage',{path:name});assert.equal((await reader.status(root)).files.find(x=>x.path===name).untracked,true);}
+  for(const name of ['-dash','[literal]',(process.platform==='win32'?'line 中文 break':'line\nbreak'),'中文']){await writeFile(path.join(root,name),Buffer.from([0,255,2,10]));await mutate(reader,root,'stage',{path:name});assert.equal((await reader.status(root)).files.find(x=>x.path===name).staged,true);await mutate(reader,root,'unstage',{path:name});assert.equal((await reader.status(root)).files.find(x=>x.path===name).untracked,true);}
   await rm(path.join(root,'delete'));await mutate(reader,root,'stage',{path:'delete'});assert.equal((await reader.status(root)).files.find(x=>x.path==='delete').index,'D');await mutate(reader,root,'unstage',{path:'delete'});await assert.rejects(readFile(path.join(root,'delete')),{code:'ENOENT'});
  }finally{await reader.close();await rm(root,{recursive:true,force:true});}
 });
@@ -49,7 +51,7 @@ test('conversion attributes and config disable writing and never execute filters
 test('unborn unstage and commit work, detached commit is disabled, and symlink/metadata paths are bounded',async()=>{
  const root=await repo(false),reader=new ProjectGit();try{
   await writeFile(path.join(root,'first'),'first\n');await mutate(reader,root,'stage',{path:'first'});await mutate(reader,root,'unstage',{path:'first'});assert.equal((await reader.status(root)).files[0].untracked,true);await mutate(reader,root,'stage',{path:'first'});await mutate(reader,root,'commit',{message:'initial'});
-  await symlink('first',path.join(root,'internal-link'));await mutate(reader,root,'stage',{path:'internal-link'});assert.match((await git(root,'ls-files','--stage','--','internal-link')).stdout,/^120000/);
+  await fixtureSymlink('first',path.join(root,'internal-link'));await mutate(reader,root,'stage',{path:'internal-link'});assert.match((await git(root,'ls-files','--stage','--','internal-link')).stdout,/^120000/);
   for(const name of ['../escape','.git/config','/etc/passwd']){const current=await reader.status(root);await assert.rejects(reader.stage(root,{path:name,revision:current.revision}),{code:'GIT_INVALID_PATH'});}
   await git(root,'checkout','--detach','-q');const state=await reader.status(root);assert.equal(state.writeCapabilities.commit,false);await assert.rejects(reader.commit(root,{message:'no',revision:state.revision}),{code:'GIT_DETACHED_COMMIT'});
  }finally{await reader.close();await rm(root,{recursive:true,force:true});}
@@ -68,7 +70,7 @@ test('commit prepare checks the original branch under native HEAD lock and rejec
 test('objects aliases, alternates and unsupported Git versions explicitly disable writes',async()=>{
  for(const kind of ['objects-link','alternates','old-version']){
   const root=await repo(),reader=new ProjectGit();try{
-   if(kind==='objects-link'){const actual=path.join(root,'object-storage');await exec('mv',[path.join(root,'.git/objects'),actual]);await symlink(actual,path.join(root,'.git/objects'));}
+   if(kind==='objects-link'){const actual=path.join(root,'object-storage');await rename(path.join(root,'.git/objects'),actual);await fixtureSymlink(actual,path.join(root,'.git/objects'));}
    if(kind==='alternates')await writeFile(path.join(root,'.git/objects/info/alternates'),'/not-used\n');
    if(kind==='old-version'){const run=reader._run.bind(reader);reader._run=(...args)=>args[1][0]==='--version'?Promise.resolve({stdout:Buffer.from('git version 2.20.0\n'),stderr:Buffer.alloc(0),code:0}):run(...args);}
    const state=await reader.status(root);assert.equal(state.writeCapabilities.stage,false);assert.equal(state.writeCapabilities.reasonCode,'GIT_WRITE_UNSUPPORTED');

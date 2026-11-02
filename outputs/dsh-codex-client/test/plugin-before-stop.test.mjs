@@ -1,3 +1,4 @@
+import {systemLauncherTarget} from './fixtures/system-launcher.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { Context } from '@deepseek-ai/cordis';
@@ -103,7 +104,7 @@ test('actual feature-files retains its unconfirmed launcher across failed stop a
   try {
     const projectPath = path.join(root, 'project'); await mkdir(projectPath); await writeFile(path.join(projectPath, 'file.txt'), 'unchanged');
     intercepted = t.mock.method(childProcess, 'spawn', (command, args, options) => {
-      if (command !== '/usr/bin/open' && command !== 'xdg-open') return originalSpawn(command, args, options);
+      const launchTarget=systemLauncherTarget(command,args);if(launchTarget===null)return originalSpawn(command,args,options);
       child = new EventEmitter(); child.pid = 123456789; child.stderr = new EventEmitter(); child.stderr.destroy = () => {}; child.kills = []; child.kill = signal => { child.kills.push(signal); return false; };
       if (succeed) process.nextTick(() => child.emit('exit', 0, null)); return child;
     }); syncBuiltinESMExports();

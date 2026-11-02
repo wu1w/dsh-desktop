@@ -1,3 +1,4 @@
+import {assertPrivatePermissions} from './fixtures/permissions.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {mkdtemp,mkdir,readFile,writeFile,realpath,rm,stat,readdir} from 'node:fs/promises';
@@ -33,7 +34,7 @@ test('real ClientStateStore snapshots and restarts preserve allowed attachment p
   const dataDir=path.join(root,'data'),store=new ClientStateStore({dataDir});await store.load();
   const entries=validPaths.map(relative=>attachment(relative)),expected={'new-none':structuredClone(entries)},state=sample({'new-none':entries});
   const saving=store.save(state);state.preferences.attachmentDrafts['new-none'][0].path='mutation-after-snapshot.md';await saving;await store.flush();
-  const file=path.join(dataDir,'client.json'),bytes=await readFile(file);assert.deepEqual(JSON.parse(bytes).preferences.attachmentDrafts,expected);assert.equal((await stat(file)).mode&0o777,0o600);
+  const file=path.join(dataDir,'client.json'),bytes=await readFile(file);assert.deepEqual(JSON.parse(bytes).preferences.attachmentDrafts,expected);assertPrivatePermissions(file,0o600);
   const restarted=new ClientStateStore({dataDir}),loaded=await restarted.load();assert.equal(loaded.recovery,null);assert.deepEqual(loaded.state.preferences.attachmentDrafts,expected);await restarted.save(loaded.state);assert.deepEqual(await readFile(file),bytes);
   assert.ok(!(await readdir(dataDir)).some(name=>name.endsWith('.tmp')));
 }));

@@ -60,13 +60,19 @@ export class DocumentDraftStore {
     let handle;
     try {
       await this._directory();
-      try {handle=await open(this.file,constants.O_RDONLY|(constants.O_NOFOLLOW??0));}
+      let before;
+      try {
+        before=await lstat(this.file,{bigint:true});
+        if(!before.isFile()||before.isSymbolicLink()||before.nlink!==1n)throw fault('DOCUMENT_DRAFTS_UNSAFE',null,true);
+        handle=await open(this.file,constants.O_RDONLY|(constants.O_NOFOLLOW??0));
+      }
       catch(error) {
         if(error.code!=='ENOENT')throw error;
         this.rows=new Map();this.lastUpdated=0;this.loaded=true;return this._list();
       }
       const info=await handle.stat();
-      if(!info.isFile())throw fault('DOCUMENT_DRAFTS_UNSAFE',null,true);
+      const identity=await handle.stat({bigint:true});
+      if(!info.isFile()||identity.nlink!==1n||identity.dev!==before.dev||identity.ino!==before.ino)throw fault('DOCUMENT_DRAFTS_UNSAFE',null,true);
       if(info.size>MAX_FILE_BYTES)throw fault('DOCUMENT_DRAFTS_CORRUPT',null,true);
       const bytes=await handle.readFile();
       if(bytes.length>MAX_FILE_BYTES)throw fault('DOCUMENT_DRAFTS_CORRUPT',null,true);
@@ -101,7 +107,7 @@ export class DocumentDraftStore {
     let temporary;let handle;
     try {
       await this._directory();
-      try {const existing=await lstat(this.file);if(!existing.isFile()||existing.isSymbolicLink())throw fault('DOCUMENT_DRAFTS_UNSAFE',null,true);}
+      try {const existing=await lstat(this.file);if(!existing.isFile()||existing.isSymbolicLink()||existing.nlink!==1)throw fault('DOCUMENT_DRAFTS_UNSAFE',null,true);}
       catch(error){if(error.code!=='ENOENT')throw error;}
       temporary=path.join(this.directory,'.document-drafts.'+randomUUID()+'.tmp');
       handle=await open(temporary,'wx',0o600);

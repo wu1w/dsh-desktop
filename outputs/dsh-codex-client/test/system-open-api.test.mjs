@@ -1,3 +1,5 @@
+import {fixtureSymlink} from './fixtures/fs-platform.mjs';
+import {systemLauncherTarget} from './fixtures/system-launcher.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import childProcess, { spawn } from 'node:child_process';
@@ -21,10 +23,10 @@ test('authenticated system-open HTTP awaits launcher result and cleans cancelled
   try {
     const projectPath = path.join(root, 'project'); await mkdir(projectPath); await writeFile(path.join(projectPath, '中文.txt'), 'kept\r\n');
     intercept = t.mock.method(childProcess, 'spawn', (command, args, options) => {
-      if (command !== '/usr/bin/open' && command !== 'xdg-open') return nativeSpawn(command, args, options);
+      const launchTarget=systemLauncherTarget(command,args);if(launchTarget===null)return nativeSpawn(command,args,options);
       const marker = path.join(root, `launcher-${++serial}.json`);
-      const child = mode === 'missing' ? nativeSpawn(path.join(root, 'nonexistent-launcher'), args, options) : nativeSpawn(process.execPath, ['-e', launcher, '--', mode, marker, ...args], options);
-      launches.push({ pid: child.pid, marker, target: args[0] }); return child;
+      const child = mode === 'missing' ? nativeSpawn(path.join(root, 'nonexistent-launcher'), args, options) : nativeSpawn(process.execPath, ['-e', launcher, '--', mode, marker, launchTarget], options);
+      launches.push({ pid: child.pid, marker, target: launchTarget }); return child;
     }); syncBuiltinESMExports();
     host = await startHost({ dataDir: path.join(root, 'data'), autoStart: false });
     const bootResponse = await fetch(host.url + '/api/bootstrap'), boot = await bootResponse.json();
@@ -49,7 +51,7 @@ test('authenticated system-open HTTP awaits launcher result and cleans cancelled
       }
     });
     await t.test('project traversal and an external symlink never launch', async () => {
-      await writeFile(path.join(root, 'outside.txt'), 'outside'); await symlink(path.join(root, 'outside.txt'), path.join(projectPath, 'alias.txt'));
+      await writeFile(path.join(root, 'outside.txt'), 'outside'); await fixtureSymlink(path.join(root, 'outside.txt'), path.join(projectPath, 'alias.txt'));
       const count = launches.length;
       for (const relative of ['../outside.txt', 'alias.txt']) assert.equal((await api(route, { path: relative })).body.code, 'OUTSIDE_PROJECT');
       assert.equal(launches.length, count);
@@ -61,7 +63,7 @@ test('authenticated system-open HTTP awaits launcher result and cleans cancelled
       const child = launches.at(-1), firstActivity = (await api('state')).body.activities.find(row => row.pluginId === 'feature-files' && row.kind === 'command');
       assert.equal(firstActivity.kind, 'command'); assert.equal(firstActivity.projectId, project.id);
       assert.equal((await api('state')).body.activities.find(row => row.pluginId === 'feature-files' && row.kind === 'command').id, firstActivity.id);
-      controller.abort(); assert.equal((await pending).error.name, 'AbortError'); await until(() => !alive(child.pid));
+      controller.abort(); assert.equal((await pending).error.name, 'AbortError'); await until(async() => !alive(child.pid)&&!(await api('state')).body.activities.some(row=>row.id===firstActivity.id));
       assert.equal((await api('state')).body.activities.some(row => row.id === firstActivity.id), false);
       mode = 'success'; assert.equal((await api(route, { path: '中文.txt' })).status, 200);
     });

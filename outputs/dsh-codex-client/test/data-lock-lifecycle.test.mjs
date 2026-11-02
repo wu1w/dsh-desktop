@@ -18,7 +18,7 @@ test('normal data lock exclusion and unexpected duplicate release keep their ori
 
 test('real native lock-directory removal preserves the original compromised cause through release',{timeout:9000},()=>temporary(async root=>{
   const lost=deferred(),directory=path.join(root,'data'),release=await acquireDataLock(directory,lost.resolve);await rm(directory+'.lock',{recursive:true});
-  const error=await lost.promise;assert.equal(error.code,'DATA_LOCK_LOST');assert.equal(error.message,'DATA_LOCK_LOST');assert.equal(error.cause.code,'ECOMPROMISED');assert.equal(error.cause.errno,-2);
+  const error=await lost.promise;assert.equal(error.code,'DATA_LOCK_LOST');assert.equal(error.message,'DATA_LOCK_LOST');assert.equal(error.cause.code,'ECOMPROMISED');assert.equal(error.cause.errno,process.platform==='win32'?-4058:-2);
   await assert.rejects(release(),actual=>actual===error);await assert.rejects(release(),actual=>actual===error);await assert.rejects(stat(directory+'.lock'),{code:'ENOENT'});
 }));
 

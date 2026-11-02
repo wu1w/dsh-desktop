@@ -16,7 +16,7 @@ async function until(fn){for(let i=0;i<500;i++){const result=await fn();if(resul
 async function fixture(t,handler=()=>textChunk('A real saved answer')){
  const root=await realpath(await mkdtemp(path.join(tmpdir(),'dsh-projectless-test-'))),dataDir=path.join(root,'data'),globalRoot=path.join(root,'global');await mkdir(dataDir);await mkdir(globalRoot);await writeFile(path.join(root,'AGENTS.md'),'UNRELATED_ANCESTOR_SETTING');await writeFile(path.join(globalRoot,'AGENTS.md'),'GLOBAL_AGENT_ONE');await writeFile(path.join(globalRoot,'MEMORY.md'),'GLOBAL_MEMORY_ONE');
  const store=new ClientStateStore({dataDir}),loaded=await store.load();loaded.state.preferences.selectedEngine='dsh-native';await store.save(loaded.state);
- const adapter=new ScriptedAdapter(handler),options={dataDir,instructionOptions:{globalRoot},engineOptions:{adapter}};let host=await startHost(options),api=await connection(host);
+ const adapter=new ScriptedAdapter(handler),options={dataDir,resolveLegacyKey:async()=> 'isolated-projectless-fixture-key',instructionOptions:{globalRoot},engineOptions:{adapter}};let host=await startHost(options),api=await connection(host);
  t.after(async()=>{await host.close();await rm(root,{recursive:true,force:true});});
  return{root,dataDir,globalRoot,adapter,get api(){return api;},get host(){return host;},async restart(){await host.close();host=await startHost(options);api=await connection(host);},async turn(session,text){await api(`sessions/${session.id}/turn`,{text,permission:'read-only'});await until(async()=>{const s=(await api('state')).sessions.find(s=>s.id===session.id);return !s.running&&s.runRecovery?.status==='completed';});return api(`sessions/${session.id}`);}};
 }

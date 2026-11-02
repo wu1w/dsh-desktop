@@ -41,3 +41,28 @@ test('native POSIX supervisor remains alive after shell exit, reaps its group an
   assert.throws(()=>process.kill(pid,0),{code:'ESRCH'});assert.doesNotThrow(()=>process.kill(unrelated.pid,0));await stopProjectCommand(supervisor);assert.doesNotThrow(()=>process.kill(unrelated.pid,0));
  }finally{unrelated.kill('SIGKILL');await unrelatedDone;await rm(root,{recursive:true,force:true});}
 });
+
+test('native private IPC loss and host death clean the owned group without touching another session',native,async()=>{
+ const root=await mkdtemp(path.join(tmpdir(),'dsh-posix-owner-loss-'));
+ const unrelated=spawn(process.execPath,['-e','setInterval(()=>{},1000)'],{detached:true,stdio:'ignore'});
+ const unrelatedDone=new Promise(resolve=>unrelated.once('close',resolve));
+ const waitGone=async pid=>{for(let n=0;n<300;n++){try{process.kill(pid,0);}catch(error){if(error.code==='ESRCH')return;throw error;}await delay(10);}assert.fail('owned process survived IPC loss');};
+ try{
+  for(const mode of ['disconnect','host-death']){
+   const file=path.join(root,mode),worker=`require('node:fs').writeFileSync(${JSON.stringify(file)},String(process.pid));process.on('SIGTERM',()=>{});setInterval(()=>{},1000);`;
+   if(mode==='disconnect'){
+    const child=spawnPosixCommand(process.execPath,['-e',worker],{cwd:root,env:process.env,graceMs:50});
+    child.stdout.resume();child.stderr.resume();
+    const done=new Promise(resolve=>child.once('exit',resolve));
+    try{const pid=await marker(file);child.disconnect();await done;await waitGone(pid);}finally{if(child.connected)child.disconnect();await done;}
+   }else{
+    const source=`import {spawnPosixCommand} from ${JSON.stringify(new URL('../server/posix-command-supervisor.mjs',import.meta.url).href)};const child=spawnPosixCommand(process.execPath,['-e',${JSON.stringify(worker)}],{cwd:${JSON.stringify(root)},env:process.env,graceMs:50});process.send({supervisorPid:child.pid});`;
+    const owner=spawn(process.execPath,['--input-type=module','-e',source],{stdio:['ignore','ignore','ignore','ipc']});
+    const done=new Promise(resolve=>owner.once('close',resolve));
+    const identity=new Promise(resolve=>owner.once('message',resolve));
+    try{const {supervisorPid}=await identity,pid=await marker(file);owner.kill('SIGKILL');await done;await waitGone(pid);await waitGone(supervisorPid);}finally{if(owner.exitCode===null&&owner.signalCode===null)owner.kill('SIGKILL');await done;}
+   }
+   assert.doesNotThrow(()=>process.kill(unrelated.pid,0));
+  }
+ }finally{unrelated.kill('SIGKILL');await unrelatedDone;await rm(root,{recursive:true,force:true});}
+});

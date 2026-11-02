@@ -14,7 +14,7 @@ test('authenticated host routes real PTY and durable local schedules through act
   const result={checkedAt:new Date().toISOString(),appRoot:appRoot??'source',providerRequests:0,modelInferenceTurns:0,simulatedNativeTurns:0,guiChecked:false};
   try{
     const projectPath=path.join(directory,'project');await mkdir(projectPath);
-    host=await startHost({dataDir:path.join(directory,'data'),binary:process.execPath,engineOptions:{args:[fileURLToPath(new URL('./fixtures/approval-app-server.mjs',import.meta.url))],resolveApiKey:async()=> 'isolated-local-tools-fixture',approvalTimeoutMs:10000}});
+    host=await startHost({dataDir:path.join(directory,'data'),binary:process.execPath,resolveLegacyKey:async()=> 'isolated-host-fixture-key',engineOptions:{args:[fileURLToPath(new URL('./fixtures/approval-app-server.mjs',import.meta.url))],resolveApiKey:async()=> 'isolated-local-tools-fixture',approvalTimeoutMs:10000}});
     const bootstrap=await fetch(host.url+'/api/bootstrap'),boot=await bootstrap.json();assert.equal(boot.state.engine.state,'ready');
     assert.match(bootstrap.headers.get('content-security-policy'),/script-src 'self'; style-src 'self' 'unsafe-inline';/);
     const headers={cookie:bootstrap.headers.get('set-cookie').split(';')[0],'x-dsh-capability':boot.capability,'content-type':'application/json','accept-language':'en'};

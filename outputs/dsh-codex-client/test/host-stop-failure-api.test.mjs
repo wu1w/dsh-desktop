@@ -23,7 +23,7 @@ test('a real command cleanup failure cannot skip other plugin, engine, listener 
   const killMock = t.mock.method(process, 'kill', function (pid, signal) { if (held && commandChild?.pid && pid === -commandChild.pid && signal !== 0) throw Object.assign(Error('isolated permission fault'), { code: 'EPERM' }); return originalKill.call(this, pid, signal); });
   try {
     await mkdir(project);
-    host = await startHost({ dataDir: path.join(directory, 'data'), binary: process.execPath, engineOptions: { args: [fileURLToPath(new URL('./fixtures/approval-app-server.mjs', import.meta.url))], resolveApiKey: async () => 'isolated-local-stop-fixture' } });
+    host = await startHost({ dataDir: path.join(directory, 'data'), binary: process.execPath, resolveLegacyKey: async () => 'isolated-host-fixture-key', engineOptions: { args: [fileURLToPath(new URL('./fixtures/approval-app-server.mjs', import.meta.url))], resolveApiKey: async () => 'isolated-local-stop-fixture' } });
     const native = host.engine, enginePid = native.client.pid; assert.ok(exists(enginePid));
     const response = await fetch(host.url + '/api/bootstrap'), boot = await response.json();
     const headers = { cookie: response.headers.get('set-cookie').split(';')[0], 'x-dsh-capability': boot.capability, 'content-type': 'application/json' };

@@ -1,4 +1,4 @@
-import { mkdir, chmod, rename, rm } from 'node:fs/promises';
+import { mkdir, mkdtemp, chmod, rename, rm } from 'node:fs/promises';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import path from 'node:path';
@@ -10,11 +10,12 @@ export async function buildPtyHelper({ appRoot = path.resolve(path.dirname(fileU
   if (process.platform !== 'darwin') return null;
   const target = path.join(appRoot,'native/bin/dsh-pty-helper');
   await mkdir(path.dirname(target),{recursive:true});
-  const temporary = target+'.'+process.pid+'.tmp';
+  const stage = await mkdtemp(path.join(path.dirname(target),'.pty-build-'));
+  const temporary = path.join(stage,path.basename(target));
   try {
     await run('/usr/bin/clang',['-std=c11','-O2','-Wall','-Wextra','-Werror',path.join(appRoot,'native/pty-helper.c'),'-o',temporary],{timeout:30000});
     await chmod(temporary,0o755); await rename(temporary,target);
-  } finally {await rm(temporary,{force:true});}
+  } finally {await rm(stage,{recursive:true,force:true});}
   return target;
 }
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) console.log(await buildPtyHelper());

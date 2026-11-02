@@ -26,7 +26,8 @@ export function stopProjectCommand(child) {
       }else requestPosixStop(child);
       // A descendant can escape its group while retaining an inherited pipe. Do
       // not wait forever for close, or discard ownership when it cannot be proved.
-      if (!await waitUntil(() => execution.doneSettled, execution.killGraceMs+1000)) throw stopFault();
+      const grace = execution.platform !== 'win32' && (child.exitCode != null || child.signalCode != null) ? 0 : execution.killGraceMs;
+      if (!await waitUntil(() => execution.doneSettled, grace+1000)) throw stopFault();
       execution.commands.delete(child); executions.delete(child);
     } catch (cause) {
       const error = cause.code === 'COMMAND_STOP_FAILED' ? cause : stopFault(cause);

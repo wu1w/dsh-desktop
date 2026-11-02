@@ -26,7 +26,7 @@ test('authenticated HTTP and native JSON-RPC preserve per-question answers, skip
   const root = await mkdtemp(path.join(tmpdir(), 'dsh-approval-api-')); let host, events;
   try {
     const projectPath = path.join(root, 'project'), capture = path.join(root, 'native-answers.jsonl'); await mkdir(projectPath);
-    host = await startHost({ dataDir: path.join(root, 'data'), binary: process.execPath, engineOptions: { args: [fileURLToPath(new URL('./fixtures/approval-app-server.mjs', import.meta.url))], resolveApiKey: async () => 'isolated-fixture-key', extraEnv: { DSH_APPROVAL_CAPTURE: capture }, approvalTimeoutMs: 10000 } });
+    host = await startHost({ dataDir: path.join(root, 'data'), binary: process.execPath, resolveLegacyKey: async () => 'isolated-host-fixture-key', engineOptions: { args: [fileURLToPath(new URL('./fixtures/approval-app-server.mjs', import.meta.url))], resolveApiKey: async () => 'isolated-fixture-key', extraEnv: { DSH_APPROVAL_CAPTURE: capture }, approvalTimeoutMs: 10000 } });
     const response = await fetch(host.url + '/api/bootstrap'), boot = await response.json(); assert.equal(boot.state.engine.state, 'ready');
     const headers = { cookie: response.headers.get('set-cookie').split(';')[0], 'x-dsh-capability': boot.capability, 'content-type': 'application/json', 'accept-language': 'en' };
     const api = async (route, body) => { const response = await fetch(host.url + '/api/' + route, { headers, method: 'POST', body: JSON.stringify(body) }); return { httpStatus: response.status, ...await response.json() }; };

@@ -33,3 +33,19 @@ await manager.close();clearTimeout(watchdog);if(result.status!=='exited'||result
 console.log('DSH_MACOS_PTY_PROBE_OK');process.exit(0);
 }catch(error){console.error(error.code||error.message);process.exit(4);}`;
 }
+
+// Exercise the private IPC supervisor under Electron's embedded Node, not only
+// a developer Node installation. Commands and all their data stay local.
+export function macosCommandProbeSource(root,home){
+ return `import {runProjectCommand,stopProjectCommands} from ${JSON.stringify(pathToFileURL(path.join(root,'server/project-commands.mjs')).href)};
+import assert from 'node:assert/strict';
+const commands=new Set();
+try{
+ const normal=await runProjectCommand({command:"printf 'PACKAGED_COMMAND_终端'",cwd:${JSON.stringify(home)},commands,shell:'/bin/sh',killGraceMs:50});
+ assert.equal(normal.code,0);assert.equal(normal.output,'PACKAGED_COMMAND_终端');assert.equal(commands.size,0);
+ assert.deepEqual(normal.cleanup,{verified:false,scope:'process-group',reason:'detached_descendants_unverified'});
+ const timed=await runProjectCommand({command:'exec /bin/sleep 60',cwd:${JSON.stringify(home)},commands,shell:'/bin/sh',timeoutMs:300,killGraceMs:50});
+ assert.notEqual(timed.code,0);assert.equal(commands.size,0);
+ console.log('DSH_MACOS_COMMAND_PROBE_OK');
+}finally{await stopProjectCommands(commands);}`;
+}

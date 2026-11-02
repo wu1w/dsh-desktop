@@ -8,7 +8,7 @@ import {pathToFileURL,fileURLToPath} from 'node:url';
 import {channelPythonPath,channelEnvironment,CHANNEL_PYTHON_VERSION,channelPythonArchitecture} from '../shared/channel-runtime.js';
 import path from 'node:path';
 import vm from 'node:vm';
-import {nativeEngineProbeSource,windowsPtyProbeSource,macosPtyProbeSource} from './packaged-probes.mjs';
+import {nativeEngineProbeSource,windowsPtyProbeSource,macosPtyProbeSource,macosCommandProbeSource} from './packaged-probes.mjs';
 
 // Compile and query capabilities only. Never observe windows, capture screens or
 // send input during packaging; service/CI sessions need not have a Default desktop.
@@ -120,6 +120,7 @@ bridge.WIRE.write(json.dumps({'version':sys.version.split()[0],'platform':sys.pl
     if(pty.status!==0||!pty.stdout.includes('DSH_WINDOWS_PTY_PROBE_OK'))throw Error('PACKAGED_WINDOWS_PTY_FAILED: '+pty.stderr);
   }
   if(platform==='darwin'){const pty=spawnSync(electron,['--input-type=module','-e',macosPtyProbeSource(root,verificationHome)],{encoding:'utf8',timeout:25000,env:{...environment,ELECTRON_RUN_AS_NODE:'1'}});if(pty.status!==0||!pty.stdout.includes('DSH_MACOS_PTY_PROBE_OK'))throw Error('PACKAGED_MACOS_PTY_FAILED: '+pty.stderr);}
+  if(platform==='darwin'){const command=spawnSync(electron,['--input-type=module','-e',macosCommandProbeSource(root,verificationHome)],{encoding:'utf8',timeout:15000,env:{...environment,ELECTRON_RUN_AS_NODE:'1'}});if(command.status!==0||!command.stdout.includes('DSH_MACOS_COMMAND_PROBE_OK'))throw Error('PACKAGED_MACOS_COMMAND_FAILED: '+command.stderr);}
   const signature=platform==='darwin'?spawnSync('/usr/bin/codesign',['--verify','--deep','--strict',appPath],{encoding:'utf8',timeout:15000}):null;
   return {checkedAt:new Date().toISOString(),appPath,bundleId,executable,platform,version:manifest.version,arch,frontendMode:'production',channelRuntime:{pythonVersion,upstream:upstream.commit,verifiedFiles:upstream.files.length,platforms:['feishu','qq','weixin','dingtalk','wecom']},engineVersion:version.stdout.trim(),nativeEngineVersion:nativeLoop.version,claudeSdkVersion:claudeSdk.version,claudeCliBundled,computerStatus,signatureVerified:signature?signature.status===0:null,files};
   } finally {await rm(verificationHome,{recursive:true,force:true});}

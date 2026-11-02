@@ -107,3 +107,5 @@ Checks ran on macOS arm64 with Node.js 26.9.0. The first concurrent run failed o
 Vendored Hermes files retain their original MIT license, with the upstream commit and file hashes recorded in `UPSTREAM.json`. Other dependencies retain their own licenses. Package documentation includes historical development notes; referenced local acceptance records are not part of this source repository.
 
 Windows device results and remaining acceptance gaps: [Windows acceptance record](outputs/dsh-codex-client/WINDOWS-ACCEPTANCE.md).
+
+Mac native results and permission boundary: [Mac acceptance record](outputs/dsh-codex-client/MAC-ACCEPTANCE.md).

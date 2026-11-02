@@ -10,9 +10,9 @@ const root=fileURLToPath(new URL('../',import.meta.url));
 const manifest=JSON.parse(await readFile(path.join(root,'package.json'),'utf8'));
 const {platform,arch}=packagingTarget();
 if(platform==='win32') {
-  // Rebuild against Electron's ABI, not the build machine's Node ABI.
-  const {rebuild}=await import('@electron/rebuild');
-  await rebuild({buildPath:root,electronVersion:manifest.devDependencies.electron,arch,onlyModules:['node-pty'],force:true});
+  const {prepareWindowsPty}=await import('./prepare-windows-pty.mjs');
+  const electron=createRequire(import.meta.url)('electron');
+  console.log('[DSH package] '+JSON.stringify(await prepareWindowsPty({root,electron,electronVersion:manifest.devDependencies.electron,arch})));
 }
 const paths=await packager({dir:root,name:'DSH',appBundleId:'com.deepseek.dsh.codex',appVersion:manifest.version,executableName:'DSH',platform,arch,electronVersion:manifest.devDependencies.electron,out:path.resolve(root,'../DSH-desktop'),icon:path.join(root,platform==='win32'?'assets/icon.ico':'assets-icon.icns'),asar:false,prune:true,overwrite:true,ignore:[/^\/reference(?:\/|$)/,/^\/src(?:\/|$)/,/^\/test(?:\/|$)/,/^\/scripts(?:\/|$)/,/^\/\.local-data(?:\/|$)/,/\.log$/]});
 const reports=[];

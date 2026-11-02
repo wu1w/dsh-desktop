@@ -6,7 +6,7 @@ export function channelPythonArchitecture(machine) {
   return ['x86_64','amd64','x64'].includes(value)?'x64':['arm64','aarch64'].includes(value)?'arm64':null;
 }
 export function channelPythonPath(root, platform = process.platform) {
-  const paths = platform === 'win32' ? path.win32 : path;
+  const paths = platform === 'win32' ? path.win32 : path.posix;
   return paths.join(root, 'python', 'runtime', ...(platform === 'win32' ? ['python.exe'] : ['bin', 'python3']));
 }
 

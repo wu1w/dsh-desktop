@@ -117,7 +117,7 @@ bridge.WIRE.write(json.dumps({'version':sys.version.split()[0],'platform':sys.pl
     // and wait for its exit; no profile, real account or model command is invoked.
     const ptySource=windowsPtyProbeSource(root,verificationHome);
     const pty=spawnSync(electron,['--input-type=module','-e',ptySource],{encoding:'utf8',timeout:25000,windowsHide:true,env:{...environment,ELECTRON_RUN_AS_NODE:'1'}});
-    if(pty.status!==0)throw Error('PACKAGED_WINDOWS_PTY_FAILED: '+pty.stderr);
+    if(pty.status!==0||!pty.stdout.includes('DSH_WINDOWS_PTY_PROBE_OK'))throw Error('PACKAGED_WINDOWS_PTY_FAILED: '+pty.stderr);
   }
   const signature=platform==='darwin'?spawnSync('/usr/bin/codesign',['--verify','--deep','--strict',appPath],{encoding:'utf8',timeout:15000}):null;
   return {checkedAt:new Date().toISOString(),appPath,bundleId,executable,platform,version:manifest.version,arch,frontendMode:'production',channelRuntime:{pythonVersion,upstream:upstream.commit,verifiedFiles:upstream.files.length,platforms:['feishu','qq','weixin','dingtalk','wecom']},engineVersion:version.stdout.trim(),nativeEngineVersion:nativeLoop.version,claudeSdkVersion:claudeSdk.version,claudeCliBundled,computerStatus,signatureVerified:signature?signature.status===0:null,files};

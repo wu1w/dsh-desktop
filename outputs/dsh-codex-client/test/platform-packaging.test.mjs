@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {mkdtemp,mkdir,writeFile,readFile,rm,readdir} from 'node:fs/promises';
+import {mkdtemp,mkdir,writeFile,readFile,rm,readdir,symlink} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import path from 'node:path';
 import {channelPythonPath,channelEnvironment,CHANNEL_PYTHON_VERSION,channelPythonArchitecture} from '../shared/channel-runtime.js';
@@ -50,7 +50,7 @@ test('successful Python preparation replaces both generated directories without 
   const root=await mkdtemp(path.join(tmpdir(),'dsh-python-prepare-'));t.after(()=>rm(root,{recursive:true,force:true}));
   await mkdir(path.join(root,'packages'));await writeFile(path.join(root,'packages','stale'),'old');
   async function execute(command,args){
-    if(args.includes('python')){await mkdir(path.join(args[args.indexOf('--install-dir')+1],`cpython-${CHANNEL_PYTHON_VERSION}-fixture`));return {stdout:''};}
+    if(args.includes('python')){const pythonRoot=args[args.indexOf('--install-dir')+1],distribution=path.join(pythonRoot,`cpython-${CHANNEL_PYTHON_VERSION}-fixture`);await mkdir(distribution);await symlink(distribution,path.join(pythonRoot,'cpython-version-alias'),process.platform==='win32'?'junction':'dir');return {stdout:''};}
     if(args[0]==='-I')return {stdout:CHANNEL_PYTHON_VERSION+'\n'+process.platform+'\n64\n'+process.arch+'\n'};
     if(args.includes('pip')){const target=args[args.indexOf('--target')+1];await mkdir(target);await writeFile(path.join(target,'current'),'new');return {stdout:''};}
     throw Error('unexpected command');
@@ -63,11 +63,11 @@ test('successful Python preparation replaces both generated directories without 
 
 test('fresh Windows pipeline installs every package before channel prep, build and verified packaging',async()=>{
   const {windowsReleasePlan,releaseWindows}=await import('../scripts/release-windows.mjs');
-  const options={root:'/isolated/dsh-codex-client',npmCli:'/tools/npm-cli.js',node:'/tools/node',platform:'win32',arch:'x64'};
+  const options={root:'/isolated/dsh-codex-client',npmCli:path.resolve('/tools/npm-cli.js'),node:'/tools/node',platform:'win32',arch:'x64'};
   const plan=windowsReleasePlan(options);assert.equal(plan.length,7);
   assert.deepEqual(plan.slice(0,4).map(p=>p.name),['install dsh-codex-engine','install dsh-native-engine','install dsh-claude-engine','install dsh-codex-client']);
   assert.deepEqual(plan.slice(4).map(p=>p.name),['prepare:channels','build','package:win']);
-  assert(plan.every(p=>p.file==='/tools/node' && p.args[0]==='/tools/npm-cli.js'));
+  assert(plan.every(p=>p.file==='/tools/node' && p.args[0]===path.resolve('/tools/npm-cli.js')));
   assert(plan.slice(0,4).every(p=>p.args.includes('--registry=https://registry.npmjs.org')));
   const calls=[];await assert.rejects(releaseWindows(options,async task=>{calls.push(task.name);if(calls.length===2)throw Error('INSTALL_FAILED');}),/INSTALL_FAILED/);
   assert.equal(calls.length,2);
@@ -115,4 +115,17 @@ test('Windows computer package probe only requests status and does not claim des
   const result=verifyWindowsComputerHelper('/staged',{}, {run,commandFor});assert.deepEqual(JSON.parse(call[2].input),{id:'package-status',action:'status'});assert.equal(result.statusProbePassed,true);assert.equal(result.nativeReady,false);assert.equal(result.nativeValidation,'pending-windows-device');
   assert.throws(()=>verifyWindowsComputerHelper('/staged',{}, {commandFor,run:()=>({status:1,stderr:'private environment detail'})}),/^Error: PACKAGED_WINDOWS_COMPUTER_FAILED$/);
   assert.throws(()=>verifyWindowsComputerHelper('/staged',{}, {commandFor,run:()=>({status:0,stdout:'not JSON'})}),/PACKAGED_WINDOWS_COMPUTER_PROTOCOL/);
+});
+
+test('Windows packaging verifies an existing native module under Electron before requiring a compiler',async()=>{
+ const {prepareWindowsPty}=await import('../scripts/prepare-windows-pty.mjs');let captured;
+ const result=await prepareWindowsPty({root:path.resolve('/client'),electron:'target-electron',electronVersion:'45.0.0',arch:'x64',run:(...args)=>{captured=args;return{status:0,stdout:'DSH_WINDOWS_PTY_PROBE_OK'};},rebuild:()=>assert.fail('verified native module needs no compiler')});
+ assert.equal(result.nativeModule,'verified-prebuild-or-existing');assert.equal(captured[0],'target-electron');assert.equal(captured[2].env.ELECTRON_RUN_AS_NODE,'1');assert(captured[1].at(-1).includes('process.versions.electron'));assert(captured[1].at(-1).includes('manager.create'));
+});
+
+test('Windows packaging rebuilds failed prebuilds and rejects an unverified rebuilt module',async()=>{
+ const {prepareWindowsPty}=await import('../scripts/prepare-windows-pty.mjs');let probes=0,builds=0;
+ const options={root:path.resolve('/client'),electron:'target-electron',electronVersion:'45.0.0',arch:'x64',rebuild:async value=>{builds++;assert.equal(value.force,true);assert.deepEqual(value.onlyModules,['node-pty']);}};
+ const result=await prepareWindowsPty({...options,run:()=>++probes===1?{status:1}:{status:0,stdout:'DSH_WINDOWS_PTY_PROBE_OK'}});assert.equal(result.nativeModule,'rebuilt-and-verified');assert.equal(builds,1);assert.equal(probes,2);
+ await assert.rejects(prepareWindowsPty({...options,run:()=>({status:0,stdout:'no real success marker'})}),/WINDOWS_PTY_REBUILD_VERIFICATION_FAILED/);
 });

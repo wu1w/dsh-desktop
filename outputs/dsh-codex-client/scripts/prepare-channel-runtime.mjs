@@ -38,6 +38,10 @@ export async function prepareChannelRuntime({root=fileURLToPath(new URL('../../d
     const distributions=(await readdir(pythonRoot,{withFileTypes:true})).filter(e=>e.isDirectory() && e.name.startsWith('cpython-'+CHANNEL_PYTHON_VERSION+'-'));
     if(distributions.length!==1)throw Error('CHANNEL_PYTHON_DISTRIBUTION_AMBIGUOUS');
     await rename(path.join(pythonRoot,distributions[0].name),path.join(pythonRoot,'runtime'));
+    // uv creates version aliases (junctions on Windows) pointing at the old
+    // distribution path. Ship only runtime; aliases become dangling on relocation
+    // and copying them requires symlink privileges on a clean Windows account.
+    for(const entry of await readdir(pythonRoot))if(entry!=='runtime')await rm(path.join(pythonRoot,entry),{recursive:true,force:true});
     const python=channelPythonPath(stage);
     const probe=await execute(python,['-I','-B','-c','import sys,struct,platform;print(".".join(map(str,sys.version_info[:3])));print(sys.platform);print(struct.calcsize("P")*8);print(platform.machine())'],{timeout:10000});
     const [version,actualPlatform,bits,machine]=probe.stdout.trim().split(/\r?\n/);

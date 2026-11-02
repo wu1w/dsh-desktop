@@ -101,7 +101,10 @@ export class ProjectPtyManager {
     if(this.closed)throw fault('PTY_CLOSED');
     const spawnPty=module.spawn??module.default?.spawn;
     if(typeof spawnPty!=='function')throw fault('PTY_HELPER_MISSING');
-    const args=path.win32.basename(this.shell).toLowerCase()==='cmd.exe'?['/d']:['-NoLogo','-NoProfile'];
+    // ConPTY can discard input sent while the supervisor compiles/starts the
+    // child shell. Do not expose a writable terminal before shell initialization.
+    const ready='DSH_PTY_READY_'+randomUUID();
+    const args=path.win32.basename(this.shell).toLowerCase()==='cmd.exe'?['/d','/k','echo '+ready]:['-NoLogo','-NoProfile','-NoExit','-EncodedCommand',Buffer.from("[Console]::WriteLine('"+ready+"')",'utf16le').toString('base64')];
     const launch=windowsJobCommand(this.shell,args,{env:this.env});
     let pty;try{pty=spawnPty(launch.file,launch.args,{cwd,env:this.env,name:'xterm-256color',cols,rows,useConpty:true,useConptyDll:false});}catch{throw fault('PTY_START_FAILED');}
     const session={id:randomUUID(),projectId,cols,rows,status:'running',exitCode:null,signal:null,pty,stopEvent:launch.stopEvent,child:pty,output:Buffer.alloc(0),start:0,end:0,rateStart:Date.now(),outputRate:0,inputRate:0,inputRateStart:Date.now(),operationStart:Date.now(),operations:0,queuedBytes:0,stopping:null,cleanupPending:false,timer:null};
@@ -126,6 +129,11 @@ export class ProjectPtyManager {
     pty.on?.('error',()=>{session.error='PTY_START_FAILED';void this._stopWindows(session).catch(()=>{});});
     session.timer=setTimeout(()=>{session.error='PTY_LIFETIME_LIMIT';void this._stopWindows(session).catch(()=>{});},this.lifetimeMs);session.timer.unref();
     for(const old of this.sessions.values()){if(this.sessions.size<=32)break;if(old.status==='exited'&&!old.cleanupPending)this.sessions.delete(old.id);}
+    if(!await waitUntil(()=>session.status==='exited'||session.output.includes(Buffer.from(ready)),10000)||session.status==='exited') {
+      session.error='PTY_START_FAILED';await this._stopWindows(session);throw fault('PTY_START_FAILED');
+    }
+    session.output=Buffer.from(session.output.toString('utf8').replace(ready+'\r\n','').replace(ready,''));
+    session.start=0;session.end=session.output.length;
     return this.read(projectId,session.id);
   }
   _stopWindows(session) {

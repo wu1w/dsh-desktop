@@ -25,7 +25,7 @@ export function windowsCommandArgs(shell,command) {
 // and Windows can reuse that PID for an unrelated process.
 export function stopWindowsJob(stopEvent,{env=process.env,execFileImpl=execFile}={}) {
   if(!/^Local\\DSH-[a-f0-9-]{36}$/.test(stopEvent??''))return Promise.reject(Object.assign(Error('WINDOWS_JOB_INVALID'),{code:'WINDOWS_JOB_INVALID'}));
-  const script="$ErrorActionPreference='Stop';$deadline=[DateTime]::UtcNow.AddSeconds(5);do{try{$event=[Threading.EventWaitHandle]::OpenExisting('"+stopEvent+"');try{$event.Set()|Out-Null}finally{$event.Dispose()};exit 0}catch [Threading.WaitHandleCannotBeOpenedException]{Start-Sleep -Milliseconds 50}}while([DateTime]::UtcNow -lt $deadline);exit 1";
+  const script="$ErrorActionPreference='Stop';$ProgressPreference='SilentlyContinue';$deadline=[DateTime]::UtcNow.AddSeconds(5);do{try{$event=[Threading.EventWaitHandle]::OpenExisting('"+stopEvent+"');try{$event.Set()|Out-Null}finally{$event.Dispose()};exit 0}catch [Threading.WaitHandleCannotBeOpenedException]{Start-Sleep -Milliseconds 50}}while([DateTime]::UtcNow -lt $deadline);exit 1";
   return new Promise((resolve,reject)=>execFileImpl(windowsShell(env),['-NoLogo','-NoProfile','-NonInteractive','-EncodedCommand',Buffer.from(script,'utf16le').toString('base64')],{windowsHide:true,timeout:7000,env:windowsEnvironment(env)},error=>error?reject(error):resolve()));
 }
 
@@ -34,6 +34,6 @@ export function windowsJobCommand(executable,args,{env=process.env,source=fileUR
   if(!/^Local\\DSH-[a-f0-9-]{36}$/.test(stopEvent))throw Object.assign(Error('WINDOWS_JOB_INVALID'),{code:'WINDOWS_JOB_INVALID'});
   const quote=value=>"'"+value.replaceAll("'","''")+"'";
   const encodedArgs=Buffer.from(JSON.stringify(args),'utf8').toString('base64');
-  const script="$ErrorActionPreference='Stop';try{Add-Type -Path "+quote(source)+";$dshArgs=ConvertFrom-Json ([Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('"+encodedArgs+"')));$dshCode=[Dsh.WindowsJob]::Run("+quote(executable)+",[string[]]$dshArgs,"+hostPid+","+quote(stopEvent)+");exit $dshCode}catch{[Console]::Error.WriteLine('DSH_WINDOWS_JOB_FAILED');exit 125}";
+  const script="$ErrorActionPreference='Stop';$ProgressPreference='SilentlyContinue';try{Add-Type -Path "+quote(source)+";$dshArgs=ConvertFrom-Json ([Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('"+encodedArgs+"')));$dshCode=[Dsh.WindowsJob]::Run("+quote(executable)+",[string[]]$dshArgs,"+hostPid+","+quote(stopEvent)+");exit $dshCode}catch{[Console]::Error.WriteLine('DSH_WINDOWS_JOB_FAILED');exit 125}";
   return {stopEvent,file:windowsShell(env),args:['-NoLogo','-NoProfile','-NonInteractive','-EncodedCommand',Buffer.from(script,'utf16le').toString('base64')]};
 }

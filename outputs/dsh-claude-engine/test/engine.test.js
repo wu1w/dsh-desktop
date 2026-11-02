@@ -19,7 +19,7 @@ test('streamed text reconciles without duplication; native UUID resumes after re
 });
 
 test('mandatory hook guards auto-approved reads, traversal, symlinks and unknown tools',async t=>{
-  let sdk;const query=async function*({options}){sdk=options;yield init(options);yield final('m','ok');yield result('ok');};const {engine,cwd,root}=await fixture(t,query);await mkdir(path.join(root,'outside'));await symlink(path.join(root,'outside'),path.join(cwd,'linked'));await engine.startTurn('one','go',{sandbox:'workspace-write'});await wait(engine);const guard=sdk.hooks.PreToolUse[0].hooks[0];
+  let sdk;const query=async function*({options}){sdk=options;yield init(options);yield final('m','ok');yield result('ok');};const {engine,cwd,root}=await fixture(t,query);await mkdir(path.join(root,'outside'));await symlink(path.join(root,'outside'),path.join(cwd,'linked'),process.platform==='win32'?'junction':'dir');await engine.startTurn('one','go',{sandbox:'workspace-write'});await wait(engine);const guard=sdk.hooks.PreToolUse[0].hooks[0];
   for(const [tool,input]of [['Read',{file_path:'../outside/secret'}],['Write',{file_path:'linked/file'}],['Glob',{pattern:'../**'}],['Bash',{command:'env'}],['Agent',{}]]){const response=await guard({tool_name:tool,tool_input:input});assert.equal(response.hookSpecificOutput.permissionDecision,'deny',tool);}
   assert.equal((await guard({tool_name:'Read',tool_input:{file_path:'inside.txt'}})).hookSpecificOutput.permissionDecision,'allow');
   assert.equal(sdk.tools.includes('Bash'),false);assert.equal(sdk.tools.includes('Agent'),false);assert.equal(sdk.strictMcpConfig,true);assert.deepEqual(sdk.mcpServers,{});assert.deepEqual(sdk.plugins,[]);assert.deepEqual(sdk.extraArgs,{restricted:null});

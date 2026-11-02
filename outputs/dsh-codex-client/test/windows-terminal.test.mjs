@@ -30,7 +30,7 @@ test('stop signals an unguessable per-job event with bounded wait, never a numer
 });
 async function fixture(t,extra={}){
  const cwd=await mkdtemp(path.join(tmpdir(),'dsh-windows-pty-'));let data,exit,captured;const writes=[],sizes=[];
- const pty={pid:123,write:value=>writes.push(value),resize:(...value)=>sizes.push(value),onData:fn=>{data=fn;return{dispose(){}};},onExit:fn=>{exit=fn;return{dispose(){}};},kill(){exit({exitCode:0});}};
+ const pty={pid:123,write:value=>writes.push(value),resize:(...value)=>sizes.push(value),onData:fn=>{data=fn;const script=Buffer.from(captured[1].at(-1),'base64').toString('utf16le');const encoded=script.match(/FromBase64String\('([^']+)'\)/)[1];const args=JSON.parse(Buffer.from(encoded,'base64').toString('utf8'));const ready=Buffer.from(args.at(-1),'base64').toString('utf16le').match(/DSH_PTY_READY_[a-f0-9-]+/)[0];queueMicrotask(()=>data(ready+'\r\n'));return{dispose(){}};},onExit:fn=>{exit=fn;return{dispose(){}};},kill(){exit({exitCode:0});}};
  const {stopJob,...options}=extra;const manager=new ProjectPtyManager({platform:'win32',env,loadPty:async()=>({spawn:(...args)=>{captured=args;return pty;}}),...options,stopJob:async(...args)=>{await stopJob?.(...args);exit({exitCode:125});}});
  t.after(async()=>{await manager.close().catch(()=>{});await rm(cwd,{recursive:true,force:true});});
  const terminal=await manager.create({projectId:'p',cwd,cols:80,rows:24});

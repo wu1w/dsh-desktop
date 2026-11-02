@@ -22,6 +22,6 @@ test('corrupt persisted state is rejected repeatedly and never replaced with an 
 });
 test('a symlink alias of the original Codex home is refused before initialization',async()=>{
   const root=await mkdtemp(path.join(tmpdir(),'dsh-home-alias-'));
-  try{await symlink(path.join(homedir(),'.codex'),path.join(root,'alias'));assert.throws(()=>new CodexEngine({dataDir:path.join(root,'alias')}),error=>error.code==='UNSAFE_CODEX_HOME');}
+  try{await symlink(path.join(homedir(),'.codex'),path.join(root,'alias'),process.platform==='win32'?'junction':'dir');assert.throws(()=>new CodexEngine({dataDir:path.join(root,'alias')}),error=>error.code==='UNSAFE_CODEX_HOME');}
   finally{await rm(root,{recursive:true,force:true});}
 });

@@ -14,13 +14,20 @@ const alive=pid=>{try{process.kill(pid,0);return true;}catch(error){if(error.cod
 async function until(predicate){for(let n=0;n<300;n++){if(await predicate())return;await pause(50);}assert.fail('Windows terminal acceptance timed out');}
 
 test('Windows native ConPTY supports Unicode, input, resize and bounded stop',{skip,timeout:30000},async()=>{
- const cwd=await mkdtemp(path.join(tmpdir(),'dsh-win-native-')),manager=new ProjectPtyManager();
+ const cwd=await mkdtemp(path.join(tmpdir(),'dsh-win-native-中文 with spaces-')),manager=new ProjectPtyManager();
  try{
   const terminal=await manager.create({projectId:'p',cwd,cols:90,rows:25});
   await manager.write('p',terminal.id,"[Console]::WriteLine(('终端测试').ToUpper()); [Console]::WriteLine('SIZE:'+ $Host.UI.RawUI.WindowSize.Width)\r");
   await until(()=>manager.read('p',terminal.id).output.includes('SIZE:90'));
   await manager.resize('p',terminal.id,{cols:110,rows:35});await manager.write('p',terminal.id,"[Console]::WriteLine('RESIZED:'+ $Host.UI.RawUI.WindowSize.Width)\r");
   await until(()=>manager.read('p',terminal.id).output.includes('RESIZED:110'));assert(manager.read('p',terminal.id).output.includes('终端测试'));
+  await manager.write('p',terminal.id,"Write-Output 'LONG_READY'; Start-Sleep -Seconds 120\r");
+  await until(()=>manager.read('p',terminal.id).output.includes('LONG_READY\r\n'));
+  const beforeInterrupt=manager.read('p',terminal.id).nextCursor;
+  await manager.write('p',terminal.id,'\x03');
+  await until(()=>manager.read('p',terminal.id,{after:beforeInterrupt}).output.includes('PS '));
+  await manager.write('p',terminal.id,"Write-Output 'CTRL_C_RECOVERED'\r");
+  await until(()=>manager.read('p',terminal.id).output.includes('CTRL_C_RECOVERED\r\n'));
   assert.equal((await manager.stop('p',terminal.id)).status,'exited');
  }finally{await manager.close();await rm(cwd,{recursive:true,force:true});}
 });

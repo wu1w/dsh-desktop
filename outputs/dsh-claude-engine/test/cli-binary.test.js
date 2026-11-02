@@ -17,8 +17,8 @@ test('macOS CLI can resolve bundled SDK before home and PATH',()=>{
  const target='/app/node_modules/@anthropic-ai/claude-agent-sdk-darwin-arm64/claude';assert.equal(resolveClaudeBinary({platform:'darwin',arch:'arm64',appRoot:'/app',home:'/isolated',env:{PATH:'/bin'},isExecutable:p=>p===target}),target);
 });
 test('real temp executable on PATH resolves without running it; missing/non executable is explicit',async t=>{
- const root=await mkdtemp(path.join(tmpdir(),'dsh-cli-path-'));t.after(()=>rm(root,{recursive:true,force:true}));await mkdir(path.join(root,'bin'));const cli=path.join(root,'bin','claude');await writeFile(cli,'#!/bin/sh\nexit 0\n',{mode:0o700});assert.equal(resolveClaudeBinary({platform:'darwin',home:root,binary:'claude',env:{PATH:path.dirname(cli)}}),cli);
- assert.throws(()=>resolveClaudeBinary({platform:'darwin',home:root,binary:'missing',env:{PATH:path.dirname(cli)}}),{code:'CLAUDE_CLI_NOT_FOUND'});
+ const root=await mkdtemp(path.join(tmpdir(),'dsh-cli-path-'));t.after(()=>rm(root,{recursive:true,force:true}));await mkdir(path.join(root,'bin'));const cli=path.join(root,'bin',process.platform==='win32'?'claude.exe':'claude');await writeFile(cli,'#!/bin/sh\nexit 0\n',{mode:0o700});assert.equal(resolveClaudeBinary({platform:process.platform,home:root,binary:'claude',env:{PATH:path.dirname(cli)}}),cli);
+ assert.throws(()=>resolveClaudeBinary({platform:process.platform,home:root,binary:'missing',env:{PATH:path.dirname(cli)}}),{code:'CLAUDE_CLI_NOT_FOUND'});
 });
 
 test('Windows child environment keeps required OS paths but excludes inherited account tokens',async()=>{

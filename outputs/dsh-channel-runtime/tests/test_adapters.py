@@ -4,6 +4,7 @@ import json
 import os
 from pathlib import Path
 import sys
+import subprocess
 import tempfile
 import unittest
 from types import SimpleNamespace as NS
@@ -37,6 +38,21 @@ class AdapterTests(unittest.IsolatedAsyncioTestCase):
             if b.platform=='weixin': b.adapter._poll_session=None
             await b.close()
         self.home.cleanup()
+
+    async def test_account_lock_excludes_another_process_and_releases(self):
+        from gateway.status import acquire_scoped_lock, release_scoped_lock
+        code = "import sys;sys.path[:0]=[sys.argv[1]+'/compat'];from gateway.status import acquire_scoped_lock;print(acquire_scoped_lock('fixture','account')[0])"
+        def child():
+            result = subprocess.run([sys.executable, '-I', '-B', '-c', code, str(ROOT)],
+                                    capture_output=True, text=True, timeout=10)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            return result.stdout.strip()
+        self.assertEqual(acquire_scoped_lock('fixture', 'account'), (True, None))
+        try:
+            self.assertEqual(child(), 'False')
+        finally:
+            release_scoped_lock('fixture', 'account')
+        self.assertEqual(child(), 'True')
 
     async def test_feishu_real_sdk_connect_contract_and_text(self):
         b=self.configured('feishu');a=b.adapter
@@ -112,7 +128,8 @@ class AdapterTests(unittest.IsolatedAsyncioTestCase):
         from gateway.platforms.base import cache_document_from_bytes_async
         value=await cache_document_from_bytes_async(b'text','../../secrets.txt')
         self.assertEqual(Path(value).parent,Path(self.home.name)/'media')
-        self.assertEqual(os.stat(value).st_mode&0o777,0o600)
+        if os.name != 'nt':
+            self.assertEqual(os.stat(value).st_mode&0o777,0o600)
         with self.assertRaises(RuntimeError):await cache_document_from_bytes_async(b'a'*(10*1024*1024+1),'a.txt')
 
 

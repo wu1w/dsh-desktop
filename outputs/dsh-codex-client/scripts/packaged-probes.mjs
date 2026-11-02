@@ -17,6 +17,6 @@ const manager=new ProjectPtyManager();const timeout=setTimeout(()=>process.exit(
 try{const row=await manager.create({projectId:'package-probe',cwd:${JSON.stringify(home)}});
 await manager.write('package-probe',row.id,${JSON.stringify("Write-Output 'DSH_PTY_OK'; exit 0\r")});
 let result;for(let n=0;n<150;n++){result=manager.read('package-probe',row.id);if(result.status==='exited')break;await new Promise(resolve=>setTimeout(resolve,100));}
-await manager.close();clearTimeout(timeout);if(result.status!=='exited'||result.exitCode!==0||!JSON.stringify(result).includes('DSH_PTY_OK'))process.exit(3);
+await manager.close();clearTimeout(timeout);if(result.status!=='exited'||result.exitCode!==0||!JSON.stringify(result).includes('DSH_PTY_OK'))process.exit(3);console.log('DSH_WINDOWS_PTY_PROBE_OK');process.exit(0);
 }catch(error){console.error(error.code||error.message);process.exit(4);}`;
 }

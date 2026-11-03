@@ -1,10 +1,10 @@
-# Mac native acceptance — 2026-11-02
+# Mac native acceptance — 2026-11-02, input follow-up 2026-11-03
 
 Base: `4a3a507ea3f3a2d22840145edd02207284750d29`, cloned into a new isolated checkout. Device: macOS 27.2 (26B123), Apple Silicon arm64; Swift 6.4.2; task-local Node 24.16.0; Electron 45.0.0, embedded Node 24.22.0 / ABI 150; pinned CPython 3.12.14. The official Node archive SHA-256 was verified before extraction. No previous checkout, installed application, existing client profile or account configuration was modified.
 
 ## Fixes and findings
 
-- The Windows-authored Swift focus changes did not compile on the Mac SDK: `kAXSheetsAttribute` is not defined. Discover sheets through AXChildren/AXSheet instead. Use AXTopLevelUIElement to distinguish a focused sheet from its parent window; reject changed focus before raising the observed window, recheck after activation, and reject disabled element actions. Swift builds successfully. **Actual Accessibility input/focus behavior is not yet certified**, as described below.
+- The Windows-authored Swift focus changes did not compile on the Mac SDK: `kAXSheetsAttribute` is not defined. Discover sheets through AXChildren/AXSheet instead. Use AXTopLevelUIElement to distinguish a focused sheet from its parent window; reject changed focus before raising the observed window, recheck after activation, and reject disabled element actions. Swift builds successfully. The scoped native Accessibility acceptance below subsequently passed after the user granted permission.
 - A captured command whose supervisor had already exited still waited the full termination grace period when a detached descendant held stdout open. POSIX stop now waits only the remaining pipe-close confirmation budget in that case (Windows timing is unchanged), retaining the retry handle and explicit failure if closure is not confirmed. The real escaped-pipe regression passes without relaxing its deadline.
 - Add native tests for private IPC disconnection and actual owner SIGKILL, checking both owned process disappearance and survival of an unrelated fixture session. No delayed numeric PID/PGID stop fallback or process scanning was added.
 - Several native/mock-engine tests supplied a fake engine key but let the host's provider preflight use machine credentials. Explicit fake host credential resolvers now isolate these fixtures, including approval, MCP, large SSE, stream recovery and projectless chat. Missing-key product protection and assertions remain intact; official missing-key/preflight tests are separate.
@@ -26,9 +26,29 @@ Final client regression: **1,134 tests; 1,130 passed, 0 failed, 0 cancelled, 4 W
 - Full build and ARM64 package gate pass. The package verifies 117 resources, Codex/Claude architecture-specific CLI discovery, native engine startup, Swift/C helpers, Python and real PTY/command execution under Electron.
 - Final packaged GUI starts in an isolated Chinese/spaced profile, displays the official DeepSeek model and missing-key protection, then exits through the production close handshake with exit code 0. This was repeated after the final rebuild. No install into `/Applications`, release upload, signing or notarization was performed.
 
-## Remaining native boundary
+## Authorized native input acceptance — 2026-11-03
 
-The final DSH application's production native runtime and packaged helper read-only `status` results is `accessibility=false`, `screenRecording=true`. No system permission was changed and no input was sent to user applications. Native clicking, AX value input, disabled/modal targets, same-app window switches, geometry changes, stale-observation refusal and recovery after a new observation remain **blocked by macOS Accessibility permission**, not passed by compilation or source review. A later acceptance run requires the user to grant Accessibility to this task's DSH.app (or the exact helper entry macOS displays) via System Settings → Privacy & Security → Accessibility and operate only self-created temporary test windows. The tested app is `outputs/DSH-desktop/DSH-darwin-arm64/DSH.app`, bundle ID `com.deepseek.dsh.codex`; its helper is `Contents/Resources/app/native/bin/dsh-computer-helper`, stable identifier `dsh-computer-helper`, CDHash `3f7f5b653853dc49db758a1aad65f6f2587ae6d3`. Recheck status before any input. This permission was not requested automatically.
+The user granted Accessibility in System Settings and explicitly requested testing. The same previously built DSH.app was used, with no rebuild, re-sign, TCC modification or alternative input implementation. The packaged production runtime returned `accessibility=true`, `screenRecording=true` before any input. The app is `outputs/DSH-desktop/DSH-darwin-arm64/DSH.app`, bundle ID `com.deepseek.dsh.codex`; its helper is `Contents/Resources/app/native/bin/dsh-computer-helper`, stable identifier `dsh-computer-helper`, unchanged CDHash `3f7f5b653853dc49db758a1aad65f6f2587ae6d3`.
+
+All **9 native acceptance steps passed** against a newly created AppKit fixture's target, decoy and modal windows:
+
+| Step | Observed result |
+| --- | --- |
+| Physical mouse click | The fixture counter increments exactly once |
+| AX text input | The target receives `safe fixture 中文` |
+| Physical keyboard input | The target receives the additional `a` |
+| Same-app window switch | `COMPUTER_FOCUS_CHANGED`; both fields unchanged |
+| Consumed observation replay | `COMPUTER_OBSERVATION_STALE` |
+| Window geometry change | `COMPUTER_OBSERVATION_STALE`; target text unchanged |
+| Modal sheet blocks parent input | `COMPUTER_FOCUS_CHANGED`; target text unchanged |
+| Disabled text field | `COMPUTER_ACTION_UNAVAILABLE`; target text unchanged |
+| Fresh observation after restoring target | The target receives `safe recovered`; decoy stays `DECOY_UNCHANGED` |
+
+The fixture was closed through stdin EOF and the test DSH application exited normally with code 0. A read-only exact-path process check found no remaining acceptance fixture, test DSH or packaged helper processes. No user application received input. No product changes were needed, so the earlier complete code regression remains applicable; this follow-up changes only the acceptance record and fixture evidence. Machine-readable results are in [validation/mac-focus-20261103.json](validation/mac-focus-20261103.json). The task-local harness/source and raw logs remain in sibling `mac-focus/` and `logs/` directories.
+
+This resolves the earlier Accessibility blocker for these scoped cases. It does not certify every third-party application, protected-field behavior, screenshot fidelity across displays, every focus race or permission persistence after future binary changes.
+
+## Remaining boundaries
 
 Intel/x64 Mac hardware, mixed-display behavior, production provider credentials/billing, clean-machine installation, distribution signing and notarization were not tested. Windows native file-symlink privilege failures remain as recorded in `WINDOWS-ACCEPTANCE.md`; Mac filesystem success does not resolve that account policy. These changes require subsequent Windows native regression before a new Windows release.
 
@@ -48,4 +68,4 @@ npm run package --prefix outputs/dsh-codex-client
 
 Task-local evidence is retained outside Git in the sibling `logs/` directory: `client-stable-final.log` and engine/Python logs, package/build logs, source/package relocation audit, packaged permission status, GUI screenshot and normal-exit result. The package verification manifest is `outputs/DSH-desktop/package-verification-darwin-arm64.json`. All 116 non-manifest packaged resource hashes match the final source/build output. The package manifest intentionally omits development dependencies; name, version and production dependencies are compared separately. No local profile, screenshot, dependency tree or app binary is committed.
 
-Git HTTPS push dry-run could not authenticate (`could not read Username`, terminal prompts disabled). No remote mutation was attempted after that result, and no chat token was read or reused. The final local commit and an incremental Git bundle are retained for transfer to an already authenticated environment. No CI result exists for an unpushed local commit.
+The previous Mac checkout lacked Git HTTPS authentication; its code commit `51d3bd94da168298dc5963f8aa09b1ce7dd51837` was subsequently published by the authorized release task. This input follow-up does not rebuild the published code or claim a new CI run. No chat token was read or reused.

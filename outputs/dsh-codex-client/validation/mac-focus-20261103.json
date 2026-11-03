@@ -1,0 +1,133 @@
+{
+  "steps": [
+    {
+      "name": "physical-click",
+      "result": true,
+      "state": {
+        "decoy": "DECOY_UNCHANGED",
+        "text": "INITIAL",
+        "enabled": true,
+        "clicks": 1,
+        "sheet": false
+      }
+    },
+    {
+      "name": "AX-value-input",
+      "result": true,
+      "state": {
+        "decoy": "DECOY_UNCHANGED",
+        "text": "safe fixture 中文",
+        "enabled": true,
+        "clicks": 1,
+        "sheet": false
+      }
+    },
+    {
+      "name": "physical-key",
+      "result": true,
+      "state": {
+        "decoy": "DECOY_UNCHANGED",
+        "text": "safe fixture 中文a",
+        "clicks": 1,
+        "enabled": true,
+        "sheet": false
+      }
+    },
+    {
+      "name": "same-app-switch-refused",
+      "result": {
+        "ok": false,
+        "code": "COMPUTER_FOCUS_CHANGED"
+      },
+      "state": {
+        "decoy": "DECOY_UNCHANGED",
+        "clicks": 1,
+        "enabled": true,
+        "text": "safe fixture 中文a",
+        "sheet": false
+      }
+    },
+    {
+      "name": "replay-refused",
+      "result": {
+        "ok": false,
+        "code": "COMPUTER_OBSERVATION_STALE"
+      }
+    },
+    {
+      "name": "geometry-refused",
+      "result": {
+        "ok": false,
+        "code": "COMPUTER_OBSERVATION_STALE"
+      },
+      "state": {
+        "decoy": "DECOY_UNCHANGED",
+        "text": "safe fixture 中文a",
+        "clicks": 1,
+        "enabled": true,
+        "sheet": false
+      }
+    },
+    {
+      "name": "modal-refused",
+      "result": {
+        "ok": false,
+        "code": "COMPUTER_FOCUS_CHANGED"
+      },
+      "state": {
+        "enabled": true,
+        "decoy": "DECOY_UNCHANGED",
+        "clicks": 1,
+        "sheet": true,
+        "text": "safe fixture 中文a"
+      }
+    },
+    {
+      "name": "disabled-refused",
+      "result": {
+        "ok": false,
+        "code": "COMPUTER_ACTION_UNAVAILABLE"
+      },
+      "state": {
+        "enabled": false,
+        "decoy": "DECOY_UNCHANGED",
+        "clicks": 1,
+        "sheet": false,
+        "text": "safe fixture 中文a"
+      }
+    },
+    {
+      "name": "fresh-observation-recovers",
+      "result": true,
+      "state": {
+        "enabled": true,
+        "decoy": "DECOY_UNCHANGED",
+        "clicks": 1,
+        "sheet": false,
+        "text": "safe recovered"
+      }
+    }
+  ],
+  "status": {
+    "accessibility": true,
+    "ok": true,
+    "screenRecording": true,
+    "available": true,
+    "browserAvailable": true,
+    "nativeAvailable": true,
+    "platform": "darwin"
+  },
+  "passed": true,
+  "appExit": {
+    "code": 0,
+    "signal": null
+  },
+  "date": "2026-11-03",
+  "testedCommit": "51d3bd94da168298dc5963f8aa09b1ce7dd51837",
+  "bundleId": "com.deepseek.dsh.codex",
+  "helperIdentifier": "dsh-computer-helper",
+  "helperCDHash": "3f7f5b653853dc49db758a1aad65f6f2587ae6d3",
+  "rebuiltDuringAcceptance": false,
+  "remainingOwnedAcceptanceProcesses": 0,
+  "scope": "Self-created AppKit target, decoy and modal windows only; production packaged runtime and Swift helper; no model requests."
+}

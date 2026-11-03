@@ -7,7 +7,7 @@ import {fileURLToPath} from 'node:url';
 import vm from 'node:vm';
 import {ComputerUse} from '../server/computer-use.mjs';
 
-async function fixture(platform,nativeStatus){
+async function fixture(platform,nativeStatus,capture){
  const windows=[],partitions=[],nativeCalls=[],nativeRequests=[],children=[],external=[];
  class Window extends EventEmitter {
   constructor(options){super();this.options=options;this.destroyed=false;this.urls=[];this.webContents=new EventEmitter();Object.assign(this.webContents,{
@@ -20,6 +20,7 @@ async function fixture(platform,nativeStatus){
   destroy(){this.destroyed=true;this.emit('closed');}
  }
  const electron={BrowserWindow:Window,session:{fromPartition(name){const partition=new EventEmitter();Object.assign(partition,{name,setPermissionRequestHandler:fn=>partition.permission=fn,setPermissionCheckHandler:fn=>partition.check=fn,clearStorageData:async()=>{partition.cleared=true;}});partitions.push(partition);return partition;}},shell:{openExternal:async url=>external.push(url)}};
+ if(capture)electron.desktopCapturer={getSources:capture};
  const module={exports:{}},require=createRequire(new URL('../desktop/computer-runtime.cjs',import.meta.url));
  const fakeSpawn=(...args)=>{nativeCalls.push(args);const child=new EventEmitter();children.push(child);child.stdout=new EventEmitter();child.stdout.setEncoding=()=>{};child.stderr=new EventEmitter();child.stdin=new EventEmitter();child.stdin.write=line=>{if(nativeStatus){const request=JSON.parse(line);nativeRequests.push(request);const reply=typeof nativeStatus==='function'?nativeStatus(request):nativeStatus;if(reply)queueMicrotask(()=>child.stdout.emit('data',JSON.stringify({id:request.id,ok:true,...reply})+'\n'));}};child.kill=()=>child.emit('exit');if(!nativeStatus)queueMicrotask(()=>child.emit('error',Object.assign(Error('missing helper'),{code:'ENOENT'})));return child;};
  const source=await readFile(new URL('../desktop/computer-runtime.cjs',import.meta.url),'utf8');
@@ -98,4 +99,27 @@ test('app connection refuses recycled windows and preserves the verified process
  const runtime={status:async()=>({available:true,nativeAvailable:true,accessibility:true}),apps:async()=>({apps:[app]}),execute:async(...args)=>{calls.push(args);return {nativeObservation:'fixture'};},stop(){},close(){}};
  const service=new ComputerUse({runtime,state:{sessions:[{id:'one'}]},getEngine:()=>({activeTurns:new Map()})});
  try{await assert.rejects(service.connect('one',{kind:'app',pid:42,windowId:'200',processStartTime:app.processStartTime}),{code:'COMPUTER_APP_GONE'});await assert.rejects(service.connect('one',{kind:'app',...app,processStartTime:'1'}),{code:'COMPUTER_APP_GONE'});await service.connect('one',{kind:'app',...app});assert.equal(calls[0][1].windowId,app.windowId);assert.equal(calls[0][1].processStartTime,app.processStartTime);}finally{service.close();}
+});
+
+const capturedThumbnail={isEmpty:()=>false,getSize:()=>({width:1100,height:695}),toDataURL:()=> 'data:image/png;base64,own-fixture'};
+const capturedWindow={id:'window:42:0',thumbnail:capturedThumbnail};
+const screenshotTarget={kind:'app',pid:123,windowId:'42',processStartTime:'638000000000000000'};
+test('asynchronous selected-window capture returns the current native token rather than stale pre-capture authority',async()=>{
+ let count=0;const bounds={x:322,y:210,width:746,height:473};
+ const f=await fixture('win32',()=>({nativeObservation:++count===1?'old':'fresh',windowId:'42',bounds}),async()=>[capturedWindow]);
+ try{const row=await f.runtime.execute('one',screenshotTarget,{action:'observe'});assert.equal(row.nativeObservation,'fresh');assert.equal(row.image,'data:image/png;base64,own-fixture');assert.equal(row.screenshot.mappingAvailable,false);assert.equal(f.nativeRequests.length,2);assert(f.nativeRequests.every(request=>request.action==='observe'));}finally{f.runtime.close();}
+});
+test('moving a window while capturing rejects its mismatched image without replaying the completed input',async()=>{
+ let changed=false;const f=await fixture('win32',()=>({nativeObservation:'fresh',windowId:'42',bounds:{x:changed?400:322,y:210,width:746,height:473}}),async()=>{changed=true;return[capturedWindow];});
+ try{await assert.rejects(f.runtime.execute('one',screenshotTarget,{action:'key',key:'7',nativeObservation:'old'}),{code:'COMPUTER_OBSERVATION_STALE'});assert.deepEqual(f.nativeRequests.map(request=>request.action),['key','observe']);}finally{f.runtime.close();}
+});
+test('a target closed during capture propagates app-gone instead of swallowing it as a missing screenshot',async()=>{
+ let count=0;const f=await fixture('win32',()=>++count===1?{nativeObservation:'old',windowId:'42',bounds:{x:0,y:0,width:700,height:500}}:{ok:false,code:'COMPUTER_APP_GONE'},async()=>[capturedWindow]);
+ try{await assert.rejects(f.runtime.execute('one',screenshotTarget,{action:'observe'}),{code:'COMPUTER_APP_GONE'});}finally{f.runtime.close();}
+});
+test('an empty or different-window thumbnail never becomes a selected-target screenshot',async()=>{
+ for(const sources of [[{id:'window:99:0',thumbnail:capturedThumbnail}],[{id:'window:42:0',thumbnail:{...capturedThumbnail,isEmpty:()=>true}}]]){
+  const f=await fixture('win32',{nativeObservation:'old',windowId:'42',bounds:{x:0,y:0,width:700,height:500}},async()=>sources);
+  try{const row=await f.runtime.execute('one',screenshotTarget,{action:'observe'});assert.equal(row.image,undefined);assert.equal(f.nativeRequests.length,1);}finally{f.runtime.close();}
+ }
 });

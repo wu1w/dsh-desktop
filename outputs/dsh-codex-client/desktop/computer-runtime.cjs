@@ -82,10 +82,22 @@ function createComputerRuntime({app,locale=()=> 'zh-CN',platform=process.platfor
      if(signal?.aborted)fail('COMPUTER_STOPPED');for(let attempt=0;;attempt++){try{return await observeBrowser(win);}catch(error){if(attempt>=2||signal?.aborted||win.isDestroyed())throw error;await new Promise(resolve=>setTimeout(resolve,80*(attempt+1)));}}
     }finally{signal?.removeEventListener('abort',abort);}
    }
-   const result=await native({...input,pid:target.pid,...(platform==='win32'?{windowId:target.windowId,processStartTime:target.processStartTime}:{})},signal);
+   let result=await native({...input,pid:target.pid,...(platform==='win32'?{windowId:target.windowId,processStartTime:target.processStartTime}:{})},signal);
    // Capture only the selected application's observed window; never fall back to another screen.
    if(platform==='win32'||systemPreferences.getMediaAccessStatus('screen')==='granted'){
-    try{const sources=await desktopCapturer.getSources({types:['window'],thumbnailSize:{width:1100,height:800},fetchWindowIcons:false});const matches=result.windowId?sources.filter(source=>source.id.split(':')[1]===String(result.windowId)):[];if(matches.length===1){result.image=matches[0].thumbnail.toDataURL();if(platform==='win32')result.screenshot=screenshotGeometry(result,matches[0].thumbnail.getSize());}}catch{}
+    let sources;try{sources=await desktopCapturer.getSources({types:['window'],thumbnailSize:{width:1100,height:800},fetchWindowIcons:false});}catch{}
+    const matches=result.windowId?sources?.filter(source=>source.id.split(':')[1]===String(result.windowId)):[];
+    if(matches?.length===1&&!matches[0].thumbnail.isEmpty()){
+     if(platform==='win32'){
+      const before=JSON.stringify([result.windowId,result.bounds,result.windowRect]);
+      const verified=await native({action:'observe',pid:target.pid,windowId:target.windowId,processStartTime:target.processStartTime},signal);
+      if(JSON.stringify([verified.windowId,verified.bounds,verified.windowRect])!==before)fail('COMPUTER_OBSERVATION_STALE');
+      // This fresh token is the helper's current authority after asynchronous
+      // capture. Never return the consumed pre-capture token or stale geometry.
+      result=verified;result.screenshot=screenshotGeometry(result,matches[0].thumbnail.getSize());
+     }
+     result.image=matches[0].thumbnail.toDataURL();
+    }
    }
    return result;
   },

@@ -1,0 +1,621 @@
+{
+  "versions": {
+    "electron": "45.0.0",
+    "chrome": "156.0.8078.48",
+    "node": "24.22.0"
+  },
+  "cases": [
+    {
+      "name": "capture-normal",
+      "passed": true,
+      "evidence": {
+        "windowId": "8260594",
+        "bounds": {
+          "x": 247,
+          "y": 170,
+          "width": 626,
+          "height": 413
+        },
+        "imageSize": {
+          "width": 1100,
+          "height": 722
+        },
+        "markerPixels": {
+          "red": 14400,
+          "blue": 14520,
+          "yellow": 14400,
+          "magenta": 0
+        },
+        "imageMarkerCentroids": {
+          "red": {
+            "x": 93.5,
+            "y": 138.5
+          },
+          "blue": {
+            "x": 997,
+            "y": 138.5
+          },
+          "yellow": {
+            "x": 93.5,
+            "y": 619.5
+          }
+        },
+        "screenshot": {
+          "coordinateSpace": "capture-image-pixels",
+          "imageSize": {
+            "width": 1100,
+            "height": 722
+          },
+          "windowCoordinateSpace": "physical-screen-pixels",
+          "windowBounds": {
+            "x": 247,
+            "y": 170,
+            "width": 626,
+            "height": 413
+          },
+          "mappingAvailable": false,
+          "mappingReason": "CAPTURE_FRAME_BOUNDS_UNAVAILABLE"
+        },
+        "preciseCaptureToInputMapping": "unsupported: native frame crop is not exposed"
+      }
+    },
+    {
+      "name": "capture-partially-occluded",
+      "passed": true,
+      "evidence": {
+        "windowId": "8260594",
+        "bounds": {
+          "x": 247,
+          "y": 170,
+          "width": 626,
+          "height": 413
+        },
+        "imageSize": {
+          "width": 1100,
+          "height": 722
+        },
+        "markerPixels": {
+          "red": 14400,
+          "blue": 14520,
+          "yellow": 14400,
+          "magenta": 0
+        },
+        "imageMarkerCentroids": {
+          "red": {
+            "x": 93.5,
+            "y": 138.5
+          },
+          "blue": {
+            "x": 997,
+            "y": 138.5
+          },
+          "yellow": {
+            "x": 93.5,
+            "y": 619.5
+          }
+        },
+        "screenshot": {
+          "coordinateSpace": "capture-image-pixels",
+          "imageSize": {
+            "width": 1100,
+            "height": 722
+          },
+          "windowCoordinateSpace": "physical-screen-pixels",
+          "windowBounds": {
+            "x": 247,
+            "y": 170,
+            "width": 626,
+            "height": 413
+          },
+          "mappingAvailable": false,
+          "mappingReason": "CAPTURE_FRAME_BOUNDS_UNAVAILABLE"
+        },
+        "preciseCaptureToInputMapping": "unsupported: native frame crop is not exposed"
+      }
+    },
+    {
+      "name": "moved-observation-refuses-scroll",
+      "passed": true,
+      "evidence": {
+        "code": "COMPUTER_OBSERVATION_STALE",
+        "before": {
+          "x": 247,
+          "y": 170,
+          "width": 626,
+          "height": 413
+        },
+        "after": {
+          "x": 322,
+          "y": 210,
+          "width": 626,
+          "height": 413
+        }
+      }
+    },
+    {
+      "name": "capture-after-move",
+      "passed": true,
+      "evidence": {
+        "windowId": "8260594",
+        "bounds": {
+          "x": 322,
+          "y": 210,
+          "width": 626,
+          "height": 413
+        },
+        "imageSize": {
+          "width": 1100,
+          "height": 722
+        },
+        "markerPixels": {
+          "red": 14400,
+          "blue": 14520,
+          "yellow": 14400,
+          "magenta": 0
+        },
+        "imageMarkerCentroids": {
+          "red": {
+            "x": 93.5,
+            "y": 138.5
+          },
+          "blue": {
+            "x": 997,
+            "y": 138.5
+          },
+          "yellow": {
+            "x": 93.5,
+            "y": 619.5
+          }
+        },
+        "screenshot": {
+          "coordinateSpace": "capture-image-pixels",
+          "imageSize": {
+            "width": 1100,
+            "height": 722
+          },
+          "windowCoordinateSpace": "physical-screen-pixels",
+          "windowBounds": {
+            "x": 322,
+            "y": 210,
+            "width": 626,
+            "height": 413
+          },
+          "mappingAvailable": false,
+          "mappingReason": "CAPTURE_FRAME_BOUNDS_UNAVAILABLE"
+        },
+        "preciseCaptureToInputMapping": "unsupported: native frame crop is not exposed"
+      }
+    },
+    {
+      "name": "resized-observation-refuses-scroll",
+      "passed": true,
+      "evidence": {
+        "code": "COMPUTER_OBSERVATION_STALE"
+      }
+    },
+    {
+      "name": "capture-after-resize",
+      "passed": true,
+      "evidence": {
+        "windowId": "8260594",
+        "bounds": {
+          "x": 322,
+          "y": 210,
+          "width": 746,
+          "height": 473
+        },
+        "imageSize": {
+          "width": 1100,
+          "height": 695
+        },
+        "markerPixels": {
+          "red": 10201,
+          "blue": 10201,
+          "yellow": 10201,
+          "magenta": 0
+        },
+        "imageMarkerCentroids": {
+          "red": {
+            "x": 78,
+            "y": 116
+          },
+          "blue": {
+            "x": 1013,
+            "y": 116
+          },
+          "yellow": {
+            "x": 78,
+            "y": 608
+          }
+        },
+        "screenshot": {
+          "coordinateSpace": "capture-image-pixels",
+          "imageSize": {
+            "width": 1100,
+            "height": 695
+          },
+          "windowCoordinateSpace": "physical-screen-pixels",
+          "windowBounds": {
+            "x": 322,
+            "y": 210,
+            "width": 746,
+            "height": 473
+          },
+          "mappingAvailable": false,
+          "mappingReason": "CAPTURE_FRAME_BOUNDS_UNAVAILABLE"
+        },
+        "preciseCaptureToInputMapping": "unsupported: native frame crop is not exposed"
+      }
+    },
+    {
+      "name": "scroll-down-actual-viewport",
+      "passed": true,
+      "evidence": {
+        "paintedPixels": 25600,
+        "expectedColor": [
+          90,
+          98,
+          123
+        ],
+        "before": {
+          "x": 400,
+          "y": 400
+        },
+        "after": {
+          "x": 400,
+          "y": 580
+        },
+        "delta": -360,
+        "vCount": 1,
+        "hCount": 0
+      }
+    },
+    {
+      "name": "scroll-up-actual-viewport",
+      "passed": true,
+      "evidence": {
+        "paintedPixels": 25600,
+        "expectedColor": [
+          90,
+          80,
+          123
+        ],
+        "before": {
+          "x": 400,
+          "y": 580
+        },
+        "after": {
+          "x": 400,
+          "y": 400
+        },
+        "delta": 360,
+        "vCount": 2,
+        "hCount": 0
+      }
+    },
+    {
+      "name": "scroll-right-actual-viewport",
+      "passed": true,
+      "evidence": {
+        "paintedPixels": 25600,
+        "expectedColor": [
+          108,
+          80,
+          123
+        ],
+        "before": {
+          "x": 400,
+          "y": 400
+        },
+        "after": {
+          "x": 580,
+          "y": 400
+        },
+        "delta": 360,
+        "vCount": 2,
+        "hCount": 1
+      }
+    },
+    {
+      "name": "scroll-left-actual-viewport",
+      "passed": true,
+      "evidence": {
+        "paintedPixels": 25600,
+        "expectedColor": [
+          90,
+          80,
+          123
+        ],
+        "before": {
+          "x": 580,
+          "y": 400
+        },
+        "after": {
+          "x": 400,
+          "y": 400
+        },
+        "delta": -360,
+        "vCount": 2,
+        "hCount": 2
+      }
+    },
+    {
+      "name": "scroll-boundary-top-clamped-noop",
+      "passed": true,
+      "evidence": {
+        "direction": "up",
+        "x": 0,
+        "y": 0
+      }
+    },
+    {
+      "name": "scroll-boundary-left-clamped-noop",
+      "passed": true,
+      "evidence": {
+        "direction": "left",
+        "x": 0,
+        "y": 0
+      }
+    },
+    {
+      "name": "scroll-boundary-bottom-clamped-noop",
+      "passed": true,
+      "evidence": {
+        "direction": "down",
+        "x": 1000,
+        "y": 1000
+      }
+    },
+    {
+      "name": "scroll-boundary-right-clamped-noop",
+      "passed": true,
+      "evidence": {
+        "direction": "right",
+        "x": 1000,
+        "y": 1000
+      }
+    },
+    {
+      "name": "non-scrollable-target-is-dispatch-noop",
+      "passed": true,
+      "evidence": {
+        "messagesDelivered": 1,
+        "viewportChanged": false,
+        "meaning": "input dispatch, not semantic scrolling guarantee"
+      }
+    },
+    {
+      "name": "focus-switch-reacquires-target-without-scrolling-decoy",
+      "passed": true,
+      "evidence": {
+        "target": "8260594",
+        "foreground": "8260594",
+        "y": 580,
+        "decoyMessages": 0
+      }
+    },
+    {
+      "name": "modal-capture-and-scroll-refusal",
+      "passed": true,
+      "evidence": {
+        "code": "COMPUTER_FOCUS_CHANGED",
+        "foreground": "8326140",
+        "target": "8260594",
+        "picture": {
+          "windowId": "8260594",
+          "bounds": {
+            "x": 322,
+            "y": 210,
+            "width": 746,
+            "height": 473
+          },
+          "imageSize": {
+            "width": 1100,
+            "height": 695
+          },
+          "markerPixels": {
+            "red": 10201,
+            "blue": 10201,
+            "yellow": 10201,
+            "magenta": 0
+          },
+          "imageMarkerCentroids": {
+            "red": {
+              "x": 78,
+              "y": 116
+            },
+            "blue": {
+              "x": 1013,
+              "y": 116
+            },
+            "yellow": {
+              "x": 78,
+              "y": 608
+            }
+          },
+          "screenshot": {
+            "coordinateSpace": "capture-image-pixels",
+            "imageSize": {
+              "width": 1100,
+              "height": 695
+            },
+            "windowCoordinateSpace": "physical-screen-pixels",
+            "windowBounds": {
+              "x": 322,
+              "y": 210,
+              "width": 746,
+              "height": 473
+            },
+            "mappingAvailable": false,
+            "mappingReason": "CAPTURE_FRAME_BOUNDS_UNAVAILABLE"
+          },
+          "preciseCaptureToInputMapping": "unsupported: native frame crop is not exposed"
+        }
+      }
+    },
+    {
+      "name": "invalid-direction-refused-before-input",
+      "passed": true,
+      "evidence": {
+        "code": "COMPUTER_INVALID_INPUT"
+      }
+    },
+    {
+      "name": "minimized-observe-and-scroll-refuse",
+      "passed": true,
+      "evidence": {
+        "captureCode": "COMPUTER_NO_WINDOW",
+        "scrollCode": "COMPUTER_OBSERVATION_STALE"
+      }
+    },
+    {
+      "name": "capture-restored",
+      "passed": true,
+      "evidence": {
+        "windowId": "8260594",
+        "bounds": {
+          "x": 322,
+          "y": 210,
+          "width": 746,
+          "height": 473
+        },
+        "imageSize": {
+          "width": 1100,
+          "height": 695
+        },
+        "markerPixels": {
+          "red": 10201,
+          "blue": 10201,
+          "yellow": 10201,
+          "magenta": 0
+        },
+        "imageMarkerCentroids": {
+          "red": {
+            "x": 78,
+            "y": 116
+          },
+          "blue": {
+            "x": 1013,
+            "y": 116
+          },
+          "yellow": {
+            "x": 78,
+            "y": 608
+          }
+        },
+        "screenshot": {
+          "coordinateSpace": "capture-image-pixels",
+          "imageSize": {
+            "width": 1100,
+            "height": 695
+          },
+          "windowCoordinateSpace": "physical-screen-pixels",
+          "windowBounds": {
+            "x": 322,
+            "y": 210,
+            "width": 746,
+            "height": 473
+          },
+          "mappingAvailable": false,
+          "mappingReason": "CAPTURE_FRAME_BOUNDS_UNAVAILABLE"
+        },
+        "preciseCaptureToInputMapping": "unsupported: native frame crop is not exposed"
+      }
+    },
+    {
+      "name": "geometry-change-during-asynchronous-capture-refuses-old-token",
+      "passed": true,
+      "evidence": {
+        "attempts": [
+          {
+            "before": {
+              "x": 328,
+              "y": 210,
+              "width": 746,
+              "height": 473
+            },
+            "after": {
+              "x": 340,
+              "y": 210,
+              "width": 746,
+              "height": 473
+            },
+            "code": "COMPUTER_OBSERVATION_STALE"
+          }
+        ]
+      }
+    },
+    {
+      "name": "closed-target-refuses-without-fallback-image",
+      "passed": true,
+      "evidence": {
+        "code": "COMPUTER_APP_GONE",
+        "scrollCode": "COMPUTER_APP_GONE"
+      }
+    },
+    {
+      "name": "exited-target-process-refuses-with-app-gone",
+      "passed": true,
+      "evidence": {
+        "code": "COMPUTER_APP_GONE",
+        "processExited": true
+      }
+    }
+  ],
+  "backend": "Electron desktopCapturer window thumbnail; native backend not exposed by JS API",
+  "target": {
+    "kind": "app",
+    "pid": 23312,
+    "name": "fixture",
+    "title": "DSH screenshot-scroll target",
+    "bundleId": "",
+    "windowId": "8260594",
+    "processStartTime": "639292663300908531"
+  },
+  "displays": [
+    {
+      "bounds": {
+        "x": 0,
+        "y": 0,
+        "width": 2560,
+        "height": 1440
+      },
+      "scaleFactor": 1,
+      "rotation": 0
+    }
+  ],
+  "gaps": [
+    {
+      "capability": "precise-capture-pixel-to-input-transform",
+      "status": "unsupported",
+      "reason": "Electron thumbnail API does not expose the native GDI/WGC frame crop or backend ID"
+    },
+    {
+      "capability": "multiple-monitors-and-mixed-DPI",
+      "status": "not-tested",
+      "reason": "Only one real 2560x1440 display at scaleFactor 1 is attached; no system display settings changed"
+    }
+  ],
+  "passed": true,
+  "backendEvidence": {
+    "api": "Electron desktopCapturer.getSources window thumbnails",
+    "runtimeLog": [
+      "DesktopCapturer::CreateRawWindowCapturer creates DesktopCapturer of type WindowCapturerWinGdi",
+      "DesktopCapturer::CreateRawWindowCapturer creates DesktopCapturer of type FallbackDesktopCapturerWrapper which has a fallback capturer of type WgcCapturerWin"
+    ],
+    "WgcSessionStarted": true,
+    "perReturnedThumbnailBackend": "not exposed; no WGC-only pass claimed"
+  },
+  "electronExit": {
+    "code": 0,
+    "signal": null,
+    "timedOut": false
+  },
+  "baseCommit": "f8a9ee12af71a062138f1a0f9056da3a0ec8bcbf",
+  "environment": {
+    "os": "Windows 10.0.26100",
+    "electron": "45.0.0",
+    "chromium": "156.0.8078.48",
+    "node": "24.22.0"
+  }
+}

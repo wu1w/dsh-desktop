@@ -29,6 +29,9 @@ function validateWindowsInput(input){
 function screenshotGeometry(result,size){
  const b=result.bounds;
  if(!b||!['x','y','width','height'].every(k=>typeof b[k]==='number'&&Number.isFinite(b[k]))||b.width<=0||b.height<=0||!boundedNumber(size?.width,1,20000)||!boundedNumber(size?.height,1,20000))return null;
- return {coordinateSpace:'window-physical-pixels',origin:{x:b.x,y:b.y},windowSize:{width:b.width,height:b.height},imageSize:{width:size.width,height:size.height},imageToWindowScale:{x:b.width/size.width,y:b.height/size.height}};
+ // Electron exposes a resized thumbnail, not the native capturer's frame
+ // origin/crop. GDI can crop resize borders differently from DWM and WGC.
+ // Neither DWM bounds nor GetWindowRect is a verified image-to-input mapping.
+ return {coordinateSpace:'capture-image-pixels',imageSize:{width:size.width,height:size.height},windowCoordinateSpace:'physical-screen-pixels',windowBounds:{...b},mappingAvailable:false,mappingReason:'CAPTURE_FRAME_BOUNDS_UNAVAILABLE'};
 }
 module.exports={windowsHelperCommand,validateWindowsInput,screenshotGeometry};
